@@ -16,10 +16,12 @@ const demandSchema = new Schema(
       street: String,
       number: String,
       complement: String,
+      neighborhoodId: { type: Schema.Types.ObjectId, ref: "Neighborhood" },
+      neighborhoodName: String,
       neighborhood: String,
       community: String,
-      city: { type: String, default: "Benevides" },
-      state: { type: String, default: "PA" },
+      city: String,
+      state: String,
       country: { type: String, default: "Brasil" },
       zipCode: String,
       formattedAddress: String,
@@ -28,6 +30,8 @@ const demandSchema = new Schema(
       geocodingStatus: { type: String, enum: ["pending", "success", "failed"], default: "pending" },
       geocodingConfidence: Number
     },
+    neighborhoodId: { type: Schema.Types.ObjectId, ref: "Neighborhood" },
+    neighborhoodName: String,
     neighborhood: String,
     community: String,
     status: {

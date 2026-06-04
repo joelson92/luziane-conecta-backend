@@ -12,6 +12,10 @@ import { demandRoutes, eventRoutes, neighborhoodRoutes, notificationRoutes, post
 import { uploadRoutes } from "./routes/uploadRoutes.js";
 import { mapRoutes } from "./routes/mapRoutes.js";
 import { settingsRoutes } from "./routes/settingsRoutes.js";
+import { publicRoutes } from "./routes/publicRoutes.js";
+import { auditRoutes } from "./routes/auditRoutes.js";
+import { geocodingRoutes } from "./routes/geocodingRoutes.js";
+import { debugRoutes } from "./routes/debugRoutes.js";
 
 export const app = express();
 
@@ -53,6 +57,10 @@ app.use("/api/users", userRoutes);
 app.use("/api/map", mapRoutes);
 app.use("/api/neighborhoods", neighborhoodRoutes);
 app.use("/api/settings", settingsRoutes);
+app.use("/api/public", publicRoutes);
+app.use("/api/audit", auditRoutes);
+app.use("/api/geocoding", geocodingRoutes);
+app.use("/api/debug", debugRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

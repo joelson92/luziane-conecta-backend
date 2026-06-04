@@ -1,11 +1,12 @@
 import type { Model } from "mongoose";
+import { buildNeighborhoodQuery } from "../services/neighborhoodService.js";
 import { asyncHandler, AppError } from "../utils/http.js";
 
 export function crudController(model: Model<any>, options: { mineField?: string; mapPayload?: (payload: Record<string, any>, req: any) => Promise<Record<string, any>> } = {}) {
   return {
     list: asyncHandler(async (req: any, res) => {
       const query: Record<string, unknown> = {};
-      if (req.query.neighborhood) query.neighborhood = req.query.neighborhood;
+      Object.assign(query, await buildNeighborhoodQuery({ neighborhoodId: req.query.neighborhoodId, neighborhood: req.query.neighborhood }));
       if (req.query.category) query.category = req.query.category;
       if (req.query.status) query.status = req.query.status;
       if (options.mineField && req.query.mine === "true") query[options.mineField] = req.user.id;

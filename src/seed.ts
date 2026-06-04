@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import { connectDatabase } from "./config/db.js";
 import { Demand, Event, Neighborhood, Post, Survey, User } from "./models/index.js";
+import { normalizeNeighborhoodName } from "./utils/neighborhood.js";
 
 async function upsertUser(email: string, password: string, data: Record<string, unknown>) {
   const passwordHash = await bcrypt.hash(password, 12);
@@ -16,12 +17,13 @@ await upsertUser("admin@luzianeconecta.com", "Admin@123456", {
 });
 
 await upsertUser("luziane@luzianeconecta.com", "Luziane@123456", {
-  name: "Prefeita Luziane",
+  name: "Luziane",
   role: "PREFEITA",
   phone: "00000000001",
   neighborhood: "Centro",
-  city: "Benevides",
-  state: "PA",
+  neighborhoodName: "Centro",
+  city: "",
+  state: "",
   country: "Brasil",
   latitude: -1.3619,
   longitude: -48.2447,
@@ -35,19 +37,27 @@ const neighborhoods = [
   { name: "Santa Maria", communities: ["Santa Maria", "Canavial"], centerLat: -1.3402, centerLng: -48.2708 },
   { name: "Maguari", communities: ["Maguari", "Jaburu"], centerLat: -1.3923, centerLng: -48.2321 },
   { name: "Benfica", communities: ["Benfica", "Distrito Industrial"], centerLat: -1.4172, centerLng: -48.2036 },
-  { name: "Parque Verde", communities: ["Parque Verde", "Residencial"], centerLat: -1.3553, centerLng: -48.2291 }
+  { name: "Parque Verde", communities: ["Parque Verde", "Residencial"], centerLat: -1.3553, centerLng: -48.2291 },
+  { name: "Médice", communities: ["Médice"], centerLat: -1.371, centerLng: -48.255 }
 ];
 
 for (const neighborhood of neighborhoods) {
-  await Neighborhood.updateOne({ name: neighborhood.name }, { $set: { ...neighborhood, isActive: true } }, { upsert: true });
+  const normalizedName = normalizeNeighborhoodName(neighborhood.name);
+  await Neighborhood.updateOne(
+    { $or: [{ normalizedName }, { name: neighborhood.name }] },
+    { $set: { ...neighborhood, normalizedName, isActive: true } },
+    { upsert: true }
+  );
 }
 
+const centro = await Neighborhood.findOne({ normalizedName: normalizeNeighborhoodName("Centro") });
+
 await Post.updateOne(
-  { title: "Mensagem da Prefeita" },
+  { title: "Mensagem da Luziane" },
   {
     $set: {
       category: "AVISOS",
-      title: "Mensagem da Prefeita",
+      title: "Mensagem da Luziane",
       content: "Este e o canal oficial para ouvir voce e cuidar melhor da nossa cidade.",
       isPublished: true,
       publishedAt: new Date()
@@ -63,6 +73,8 @@ await Event.updateOne(
       title: "Reuniao comunitaria",
       description: "Escuta publica com moradores.",
       locationName: "Centro comunitario",
+      neighborhoodId: centro?._id,
+      neighborhoodName: centro?.get("name") ?? "Centro",
       neighborhood: "Centro",
       location: { lat: -1.3619, lng: -48.2447 },
       startDate: new Date(),
@@ -95,6 +107,8 @@ if (citizen) {
         type: "PEDIDO",
         title: "Iluminacao da rua",
         description: "Solicitacao de reparo na iluminacao publica.",
+        neighborhoodId: centro?._id,
+        neighborhoodName: citizen.get("neighborhoodName") ?? citizen.get("neighborhood") ?? "Centro",
         neighborhood: citizen.get("neighborhood") ?? "Centro",
         status: "RECEBIDO"
       }

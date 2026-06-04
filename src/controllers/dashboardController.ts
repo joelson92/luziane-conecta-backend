@@ -1,5 +1,7 @@
 import { CitizenActivity, Demand, Event, Neighborhood, Notification, Post, Survey, SystemSettings, User } from "../models/index.js";
+import { citizenRoleFilter, validUserCoordinateQuery } from "../services/userGeoService.js";
 import { asyncHandler } from "../utils/http.js";
+import { normalizeNeighborhoodName } from "../utils/neighborhood.js";
 
 export const dashboard = asyncHandler(async (_req, res) => {
   const now = new Date();
@@ -45,14 +47,14 @@ export const dashboard = asyncHandler(async (_req, res) => {
     User.countDocuments({
       $or: [{ lastLoginAt: { $gte: thirtyDaysAgo } }, { _id: { $in: activeActivityUserIds } }]
     }),
-    User.countDocuments({ role: "CIDADAO" }),
+    User.countDocuments({ role: citizenRoleFilter }),
     Demand.countDocuments({ status: { $ne: "RESOLVIDO" } }),
     Demand.countDocuments({ status: "RESOLVIDO" }),
     Demand.countDocuments({ status: { $ne: "RESOLVIDO" }, createdAt: { $lt: lateThreshold } }),
     Event.countDocuments({ isPublished: true, startDate: { $gte: now } }),
     Survey.countDocuments({ isActive: true }),
     Notification.aggregate([{ $group: { _id: null, sent: { $sum: "$sentCount" } } }]),
-    User.aggregate([{ $match: { role: "CIDADAO" } }, { $group: { _id: "$neighborhood", total: { $sum: 1 } } }, { $sort: { total: -1 } }]),
+    User.aggregate([{ $match: { role: citizenRoleFilter } }, { $group: { _id: neighborhoodNameExpression(), total: { $sum: 1 } } }, { $sort: { total: -1 } }]),
     Demand.aggregate([
       {
         $group: {
@@ -63,23 +65,23 @@ export const dashboard = asyncHandler(async (_req, res) => {
       { $sort: { "_id.month": 1 } }
     ]),
     CitizenActivity.aggregate([{ $group: { _id: { $dateToString: { format: "%Y-%m", date: "$createdAt" } }, total: { $sum: 1 } } }]),
-    User.countDocuments({ role: "CIDADAO", latitude: { $type: "number" }, longitude: { $type: "number" } }),
+    User.countDocuments(validUserCoordinateQuery()),
     Demand.countDocuments({ "location.lat": { $type: "number" }, "location.lng": { $type: "number" } }),
-    User.aggregate([{ $match: { role: "CIDADAO", latitude: { $type: "number" } } }, { $group: { _id: "$neighborhood", total: { $sum: 1 } } }, { $sort: { total: -1 } }, { $limit: 1 }]),
-    Demand.aggregate([{ $match: { type: "RECLAMACAO" } }, { $group: { _id: "$neighborhood", total: { $sum: 1 } } }, { $sort: { total: -1 } }, { $limit: 1 }]),
+    User.aggregate([{ $match: validUserCoordinateQuery() }, { $group: { _id: neighborhoodNameExpression(), total: { $sum: 1 } } }, { $sort: { total: -1 } }, { $limit: 1 }]),
+    Demand.aggregate([{ $match: { type: "RECLAMACAO" } }, { $group: { _id: neighborhoodNameExpression(), total: { $sum: 1 } } }, { $sort: { total: -1 } }, { $limit: 1 }]),
     Demand.aggregate([{ $match: { status: { $ne: "RESOLVIDO" } } }, { $group: { _id: "$address.street", total: { $sum: 1 } } }, { $match: { _id: { $ne: null } } }, { $sort: { total: -1 } }, { $limit: 5 }]),
-    Demand.aggregate([{ $match: { type: "RECLAMACAO" } }, { $group: { _id: "$neighborhood", total: { $sum: 1 } } }, { $sort: { total: -1 } }]),
+    Demand.aggregate([{ $match: { type: "RECLAMACAO" } }, { $group: { _id: neighborhoodNameExpression(), total: { $sum: 1 } } }, { $sort: { total: -1 } }]),
     neighborhoodActivityRanking(),
-    Demand.find().sort({ createdAt: -1 }).limit(6).select("createdAt neighborhood title status assignedTo type"),
+    Demand.find().sort({ createdAt: -1 }).limit(6).select("createdAt neighborhoodId neighborhoodName neighborhood title status assignedTo type"),
     Post.find({ isPublished: true }).sort({ publishedAt: -1, createdAt: -1 }).limit(5).select("title publishedAt createdAt"),
     Event.find({ isPublished: true }).sort({ createdAt: -1 }).limit(5).select("title createdAt"),
     Survey.find({ isActive: true }).sort({ createdAt: -1 }).limit(5).select("title createdAt"),
     Notification.find().sort({ createdAt: -1 }).limit(5).select("title createdAt"),
     Demand.find({ status: "RESOLVIDO" }).sort({ resolvedAt: -1, updatedAt: -1 }).limit(5).select("title resolvedAt updatedAt"),
-    User.find({ role: "CIDADAO", latitude: { $type: "number" }, longitude: { $type: "number" } }).select("neighborhood community latitude longitude").limit(1000),
-    Demand.find({ "location.lat": { $type: "number" }, "location.lng": { $type: "number" } }).select("title status neighborhood location").limit(1000),
-    Event.find({ "location.lat": { $type: "number" }, "location.lng": { $type: "number" }, isPublished: true }).select("title neighborhood location startDate").limit(1000),
-    User.find({ role: "CIDADAO", latitude: { $type: "number" }, longitude: { $type: "number" } }).select("latitude longitude"),
+    User.find(validUserCoordinateQuery()).select("neighborhoodId neighborhoodName neighborhood community latitude longitude").limit(1000),
+    Demand.find({ "location.lat": { $type: "number" }, "location.lng": { $type: "number" } }).select("title status neighborhoodId neighborhoodName neighborhood location").limit(1000),
+    Event.find({ "location.lat": { $type: "number" }, "location.lng": { $type: "number" }, isPublished: true }).select("title neighborhoodId neighborhoodName neighborhood location startDate").limit(1000),
+    User.find(validUserCoordinateQuery()).select("latitude longitude"),
     Demand.find({ "location.lat": { $type: "number" }, "location.lng": { $type: "number" } }).select("location"),
     calculateMostMentionedTopics()
   ]);
@@ -134,8 +136,8 @@ export const dashboard = asyncHandler(async (_req, res) => {
 
 export const intelligence = asyncHandler(async (_req, res) => {
   const [activeNeighborhoods, complaints, terms] = await Promise.all([
-    CitizenActivity.aggregate([{ $lookup: { from: "users", localField: "userId", foreignField: "_id", as: "user" } }, { $unwind: "$user" }, { $group: { _id: "$user.neighborhood", total: { $sum: 1 } } }, { $sort: { total: -1 } }]),
-    Demand.aggregate([{ $group: { _id: "$neighborhood", total: { $sum: 1 } } }, { $sort: { total: -1 } }]),
+    CitizenActivity.aggregate([{ $lookup: { from: "users", localField: "userId", foreignField: "_id", as: "user" } }, { $unwind: "$user" }, { $group: { _id: { $ifNull: ["$user.neighborhoodName", "$user.neighborhood"] }, total: { $sum: 1 } } }, { $sort: { total: -1 } }]),
+    Demand.aggregate([{ $group: { _id: neighborhoodNameExpression(), total: { $sum: 1 } } }, { $sort: { total: -1 } }]),
     Post.aggregate([{ $project: { words: { $split: ["$title", " "] } } }, { $unwind: "$words" }, { $group: { _id: "$words", total: { $sum: 1 } } }, { $sort: { total: -1 } }, { $limit: 25 }])
   ]);
   res.json({ activeNeighborhoods, neighborhoodsWithComplaints: complaints, wordCloud: terms });
@@ -164,23 +166,23 @@ export const adoption = asyncHandler(async (_req, res) => {
     neighborhoods,
     settings
   ] = await Promise.all([
-    User.countDocuments({ role: "CIDADAO" }),
+    User.countDocuments({ role: citizenRoleFilter }),
     User.countDocuments({
-      role: "CIDADAO",
+      role: citizenRoleFilter,
       $or: [{ lastLoginAt: { $gte: thirtyDaysAgo } }, { _id: { $in: activeActivityUserIds } }]
     }),
-    User.countDocuments({ role: "CIDADAO", createdAt: { $gte: startOfToday } }),
-    User.countDocuments({ role: "CIDADAO", createdAt: { $gte: startOfMonth } }),
-    User.countDocuments({ role: "CIDADAO", createdAt: { $gte: startOfPreviousMonth, $lt: endOfPreviousMonth } }),
-    User.countDocuments({ role: "CIDADAO", latitude: { $type: "number" }, longitude: { $type: "number" } }),
+    User.countDocuments({ role: citizenRoleFilter, createdAt: { $gte: startOfToday } }),
+    User.countDocuments({ role: citizenRoleFilter, createdAt: { $gte: startOfMonth } }),
+    User.countDocuments({ role: citizenRoleFilter, createdAt: { $gte: startOfPreviousMonth, $lt: endOfPreviousMonth } }),
+    User.countDocuments(validUserCoordinateQuery()),
     User.aggregate([
-      { $match: { role: "CIDADAO" } },
-      { $group: { _id: "$neighborhood", total: { $sum: 1 }, latitude: { $avg: "$latitude" }, longitude: { $avg: "$longitude" } } },
+      { $match: { role: citizenRoleFilter } },
+      { $group: { _id: neighborhoodNameExpression(), total: { $sum: 1 }, latitude: { $avg: "$latitude" }, longitude: { $avg: "$longitude" } } },
       { $sort: { total: -1 } },
       { $limit: 10 }
     ]),
     User.aggregate([
-      { $match: { role: "CIDADAO" } },
+      { $match: { role: citizenRoleFilter } },
       { $group: { _id: { $dateToString: { format: "%Y-%m", date: "$createdAt" } }, total: { $sum: 1 } } },
       { $sort: { _id: 1 } }
     ]),
@@ -188,11 +190,11 @@ export const adoption = asyncHandler(async (_req, res) => {
     SystemSettings.findOne()
   ]);
 
-  const countByNeighborhood = new Map(topNeighborhoods.map((item) => [item._id || "Nao informado", item.total]));
+  const countByNeighborhood = new Map(topNeighborhoods.map((item) => [normalizeNeighborhoodName(item._id || "Nao informado"), item.total]));
   const lowAdhesionNeighborhoods = neighborhoods
     .map((item) => ({
       neighborhood: item.get("name"),
-      total: countByNeighborhood.get(item.get("name")) ?? 0,
+      total: countByNeighborhood.get(normalizeNeighborhoodName(item.get("name"))) ?? 0,
       latitude: item.get("centerLat"),
       longitude: item.get("centerLng")
     }))
@@ -226,9 +228,9 @@ export const adoption = asyncHandler(async (_req, res) => {
 
 async function neighborhoodActivityRanking() {
   const [users, demands, events] = await Promise.all([
-    User.aggregate([{ $match: { role: "CIDADAO" } }, { $group: { _id: "$neighborhood", total: { $sum: 1 } } }]),
-    Demand.aggregate([{ $group: { _id: "$neighborhood", total: { $sum: 1 } } }]),
-    Event.aggregate([{ $match: { isPublished: true } }, { $group: { _id: "$neighborhood", total: { $sum: 1 } } }])
+    User.aggregate([{ $match: { role: citizenRoleFilter } }, { $group: { _id: neighborhoodNameExpression(), total: { $sum: 1 } } }]),
+    Demand.aggregate([{ $group: { _id: neighborhoodNameExpression(), total: { $sum: 1 } } }]),
+    Event.aggregate([{ $match: { isPublished: true } }, { $group: { _id: neighborhoodNameExpression(), total: { $sum: 1 } } }])
   ]);
   const totals = new Map<string, number>();
   for (const collection of [users, demands, events]) {
@@ -238,6 +240,10 @@ async function neighborhoodActivityRanking() {
     }
   }
   return Array.from(totals.entries()).map(([neighborhood, total]) => ({ _id: neighborhood, total })).sort((a, b) => b.total - a.total);
+}
+
+function neighborhoodNameExpression() {
+  return { $ifNull: ["$neighborhoodName", "$neighborhood"] };
 }
 
 function normalizeDemandEvolution(rows: Array<{ _id: { month: string; status: string }; total: number }>) {

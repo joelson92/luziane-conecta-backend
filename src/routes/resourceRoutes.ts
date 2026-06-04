@@ -10,13 +10,15 @@ import { adminRoles, requireAuth, requireRoles } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { asyncHandler } from "../utils/http.js";
 import { enrichDemandAddress, enrichUserAddress } from "../services/geocodingService.js";
+import { enrichNeighborhoodPayload } from "../services/neighborhoodService.js";
+import { normalizeNeighborhoodName } from "../utils/neighborhood.js";
 
 const postCrud = crudController(Post);
-const demandCrud = crudController(Demand, { mineField: "citizenId", mapPayload: async (payload) => enrichDemandAddress(payload) });
-const eventCrud = crudController(Event);
+const demandCrud = crudController(Demand, { mineField: "citizenId", mapPayload: async (payload) => enrichDemandAddress(await enrichNeighborhoodPayload(payload)) });
+const eventCrud = crudController(Event, { mapPayload: async (payload) => enrichNeighborhoodPayload(payload) });
 const surveyCrud = crudController(Survey);
 const notificationCrud = crudController(Notification);
-const neighborhoodCrud = crudController(Neighborhood);
+const neighborhoodCrud = crudController(Neighborhood, { mapPayload: async (payload) => ({ ...payload, normalizedName: payload.name ? normalizeNeighborhoodName(payload.name) : payload.normalizedName }) });
 
 export const postRoutes = Router();
 postRoutes.get("/", postCrud.list);
@@ -80,7 +82,11 @@ userRoutes.patch("/:id/status", requireRoles("SUPER_ADMIN", "PREFEITA", "ASSESSO
 userRoutes.delete("/:id", requireRoles("SUPER_ADMIN", "PREFEITA", "ASSESSOR"), softDeleteUser);
 
 export const neighborhoodRoutes = Router();
-neighborhoodRoutes.get("/", requireAuth, requireRoles(...adminRoles), neighborhoodCrud.list);
+neighborhoodRoutes.get("/", requireAuth, requireRoles(...adminRoles), asyncHandler(async (_req, res) => {
+  const data = await Neighborhood.find({ isActive: true }).sort({ name: 1 });
+  console.log("[NEIGHBORHOODS]", data.map((item) => item.get("name")));
+  res.json({ data });
+}));
 neighborhoodRoutes.post("/", requireAuth, requireRoles(...adminRoles), neighborhoodCrud.create);
 neighborhoodRoutes.patch("/:id", requireAuth, requireRoles(...adminRoles), neighborhoodCrud.update);
 neighborhoodRoutes.put("/:id", requireAuth, requireRoles(...adminRoles), neighborhoodCrud.update);

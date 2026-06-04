@@ -1,6 +1,8 @@
 import bcrypt from "bcryptjs";
+import mongoose from "mongoose";
 import { CitizenActivity, Demand, Event, Survey, User } from "../models/index.js";
-import { enrichUserAddress } from "../services/geocodingService.js";
+import { enrichAddressFromZipCode, enrichUserAddress } from "../services/geocodingService.js";
+import { buildNeighborhoodQuery, enrichNeighborhoodPayload, stripEmptyNeighborhoodId } from "../services/neighborhoodService.js";
 import { citizenRoleFilter, getCitizenGeoStats, normalizeUserCoordinates, validUserCoordinateQuery } from "../services/userGeoService.js";
 import { asyncHandler, AppError } from "../utils/http.js";
 
@@ -11,7 +13,7 @@ export const listUsers = asyncHandler(async (req, res) => {
   if (req.query.role) query.role = normalizeRole(String(req.query.role));
   if (req.query.status === "active") query.isActive = true;
   if (req.query.status === "inactive") query.isActive = false;
-  if (req.query.neighborhood) query.neighborhood = req.query.neighborhood;
+  Object.assign(query, await buildNeighborhoodQuery({ neighborhoodId: req.query.neighborhoodId, neighborhood: req.query.neighborhood }));
   if (req.query.community) query.community = req.query.community;
 
   if (req.query.search) {
@@ -30,15 +32,17 @@ export const getUser = asyncHandler(async (req, res) => {
 });
 
 export const createUser = asyncHandler(async (req, res) => {
+  console.log("[USER_RAW_BODY]", req.body);
   const passwordHash = await bcrypt.hash(req.body.password || "User@123456", 12);
-  const payload = normalizeUserCoordinates(await enrichUserAddress({ ...req.body, role: normalizeRole(req.body.role || "CIDADAO"), passwordHash }));
+  const payload = normalizeUserCoordinates(await prepareUserPayload(sanitizeUserPayload({ ...req.body, role: normalizeRole(req.body.role || "CIDADAO"), passwordHash })));
   const user = await User.create(payload);
   const safe = await User.findById(user._id).select(safeSelect);
   res.status(201).json({ data: safe });
 });
 
 export const updateUser = asyncHandler(async (req, res) => {
-  const payload = normalizeUserCoordinates(await enrichUserAddress({ ...req.body, role: req.body.role ? normalizeRole(req.body.role) : undefined }));
+  console.log("[USER_RAW_BODY]", req.body);
+  const payload = normalizeUserCoordinates(await prepareUserPayload(sanitizeUserPayload({ ...req.body, role: req.body.role ? normalizeRole(req.body.role) : undefined })));
   delete payload.passwordHash;
   delete payload.refreshTokenHash;
   const user = await User.findByIdAndUpdate(req.params.id, compact(payload), { new: true }).select(safeSelect);
@@ -59,12 +63,14 @@ export const updateUserStatus = asyncHandler(async (req, res) => {
 });
 
 export const usersOverview = asyncHandler(async (_req, res) => {
-  const [totalUsers, citizens, activeUsers, citizenGeoStats, neighborhoods] = await Promise.all([
+  const [totalUsers, citizens, activeUsers, citizenGeoStats, neighborhoodsWithUsers, usersWithoutNeighborhoodId, usersByNeighborhoodResult] = await Promise.all([
     User.countDocuments(),
     User.countDocuments({ role: citizenRoleFilter }),
     User.countDocuments({ isActive: true }),
     getCitizenGeoStats(),
-    User.distinct("neighborhood", validUserCoordinateQuery({ neighborhood: { $nin: [null, ""] } }))
+    countCitizenNeighborhoods(),
+    User.countDocuments({ role: citizenRoleFilter, $or: [{ neighborhoodId: { $exists: false } }, { neighborhoodId: null }] }),
+    usersByNeighborhoodAggregation()
   ]);
   const stats = {
     totalUsers,
@@ -74,17 +80,16 @@ export const usersOverview = asyncHandler(async (_req, res) => {
     geolocatedUsers: citizenGeoStats.geolocatedCitizens,
     citizenGeolocatedUsers: citizenGeoStats.geolocatedCitizens,
     citizenUsersWithoutGeo: citizenGeoStats.withoutGeo,
-    neighborhoodsWithUsers: neighborhoods.length
+    neighborhoodsWithUsers
   };
   console.log("[USER_STATS]", stats);
+  console.log("[USERS_WITHOUT_NEIGHBORHOOD_ID]", usersWithoutNeighborhoodId);
+  console.log("[USERS_BY_NEIGHBORHOOD]", usersByNeighborhoodResult);
   res.json(stats);
 });
 
 export const usersByNeighborhood = asyncHandler(async (_req, res) => {
-  const data = await User.aggregate([
-    { $group: { _id: "$neighborhood", total: { $sum: 1 }, active: { $sum: { $cond: ["$isActive", 1, 0] } } } },
-    { $sort: { total: -1 } }
-  ]);
+  const data = await usersByNeighborhoodAggregation();
   res.json({ data: data.map((item) => ({ neighborhood: item._id || "Nao informado", total: item.total, active: item.active })) });
 });
 
@@ -140,5 +145,76 @@ function normalizeRole(role: string) {
 }
 
 function compact(payload: Record<string, unknown>) {
-  return Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined));
+  const sanitized = sanitizeUserPayload(stripEmptyNeighborhoodId(payload));
+  return Object.fromEntries(Object.entries(sanitized).filter(([, value]) => value !== undefined && value !== ""));
+}
+
+async function prepareUserPayload(payload: Record<string, any>) {
+  const sanitized = sanitizeUserPayload(stripEmptyNeighborhoodId(payload));
+  console.log("[USER_SANITIZED_BODY]", sanitized);
+  const withCep = await enrichAddressFromZipCode(sanitized);
+  validateCepAddress(withCep);
+  const withNeighborhood = await enrichNeighborhoodPayload(withCep);
+  const geocoded = await enrichUserAddress(sanitizeUserPayload(withNeighborhood));
+  return sanitizeUserPayload(geocoded);
+}
+
+function validateCepAddress(data: Record<string, any>) {
+  if (!data.street || !data.neighborhoodName || !data.city || !data.state) {
+    throw new AppError(400, "CEP invalido ou incompleto. Informe um CEP que retorne rua e bairro.");
+  }
+}
+
+function sanitizeUserPayload<T extends Record<string, any>>(data: T): T {
+  const next: Record<string, any> = { ...data };
+  sanitizeNeighborhoodId(next);
+  if (next.address) {
+    next.address = { ...next.address };
+    sanitizeNeighborhoodId(next.address);
+  }
+  return next as T;
+}
+
+function sanitizeNeighborhoodId(data: Record<string, any>) {
+  const value = data.neighborhoodId;
+  if (!value || value === "" || value === "undefined" || value === "null") {
+    delete data.neighborhoodId;
+    return;
+  }
+  if (value instanceof mongoose.Types.ObjectId) return;
+  if (typeof value !== "string" || !mongoose.Types.ObjectId.isValid(value)) delete data.neighborhoodId;
+}
+
+async function countCitizenNeighborhoods() {
+  const rows = await User.aggregate([
+    { $match: { role: citizenRoleFilter } },
+    {
+      $group: {
+        _id: {
+          id: "$neighborhoodId",
+          name: { $ifNull: ["$neighborhoodName", "$neighborhood"] }
+        }
+      }
+    },
+    {
+      $match: {
+        $or: [{ "_id.id": { $ne: null } }, { "_id.name": { $nin: [null, ""] } }]
+      }
+    }
+  ]);
+  return rows.length;
+}
+
+async function usersByNeighborhoodAggregation() {
+  return User.aggregate([
+    { $match: { role: citizenRoleFilter } },
+    {
+      $group: {
+        _id: { $ifNull: ["$neighborhoodName", "$neighborhood"] },
+        total: { $sum: 1 },
+        active: { $sum: { $cond: ["$isActive", 1, 0] } }
+      }
+    },
+    { $sort: { total: -1 } }
+  ]);
 }

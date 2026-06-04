@@ -9,6 +9,8 @@ const eventSchema = new Schema(
       lat: Number,
       lng: Number
     },
+    neighborhoodId: { type: Schema.Types.ObjectId, ref: "Neighborhood" },
+    neighborhoodName: String,
     neighborhood: String,
     startDate: { type: Date, required: true },
     endDate: Date,

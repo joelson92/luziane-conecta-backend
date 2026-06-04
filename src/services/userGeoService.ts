@@ -1,13 +1,20 @@
 import { User } from "../models/index.js";
 
 export const citizenRole = "CIDADAO";
-export const citizenRoleFilter = { $in: [citizenRole, "citizen", "cidadao", "cidadão"] };
+export const citizenRoleFilter = { $in: [citizenRole, /^citizen$/i, /^cidadao$/i, /^cidad.o$/i] };
 
 export function activeCitizenQuery(extra: Record<string, unknown> = {}) {
   return {
     role: citizenRoleFilter,
     isActive: true,
     ...extra
+  };
+}
+
+export function missingUserCoordinateQuery(extra: Record<string, unknown> = {}) {
+  return {
+    ...activeCitizenQuery(extra),
+    $or: [{ latitude: { $exists: false } }, { longitude: { $exists: false } }, { latitude: null }, { longitude: null }]
   };
 }
 

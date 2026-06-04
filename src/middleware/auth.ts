@@ -40,7 +40,7 @@ function normalizeRole(role: string): Role {
     superadmin: "SUPER_ADMIN",
     super_admin: "SUPER_ADMIN",
     mayor: "PREFEITA",
-    prefeita: "PREFEITA",
+    lideranca: "PREFEITA",
     advisor: "ASSESSOR",
     assessor: "ASSESSOR",
     citizen: "CIDADAO",

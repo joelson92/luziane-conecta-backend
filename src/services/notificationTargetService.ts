@@ -136,8 +136,8 @@ function normalizeRole(role: string): Role {
   const map: Record<string, Role> = {
     superadmin: "SUPER_ADMIN",
     super_admin: "SUPER_ADMIN",
-    prefeita: "PREFEITA",
     mayor: "PREFEITA",
+    lideranca: "PREFEITA",
     assessor: "ASSESSOR",
     advisor: "ASSESSOR",
     cidadao: "CIDADAO",
