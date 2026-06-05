@@ -82,7 +82,7 @@ export async function buildNeighborhoodQuery(input: { neighborhoodId?: unknown; 
     return { $or: clauses };
   }
 
-  const rawName = stringValue(input.neighborhood);
+  const rawName = (id && !mongoose.Types.ObjectId.isValid(id)) ? id : stringValue(input.neighborhood);
   const normalizedName = normalizeNeighborhoodName(rawName);
   if (!normalizedName) return {};
 

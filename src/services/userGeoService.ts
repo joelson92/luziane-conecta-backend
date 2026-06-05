@@ -1,8 +1,71 @@
 import { User } from "../models/index.js";
 
+// ─── Role constants ─────────────────────────────────────────────────────────────
 export const citizenRole = "CIDADAO";
-export const citizenRoleFilter = { $in: [citizenRole, /^citizen$/i, /^cidadao$/i, /^cidad.o$/i] };
 
+/** All role values that represent a citizen across DB variants. */
+export const CITIZEN_ROLES = [
+  "CIDADAO", "cidadao", "citizen", "CITIZEN", "Cidadão", "cidadão", "CIDADÃO"
+] as const;
+
+export const citizenRoleFilter = { $in: [...CITIZEN_ROLES] };
+
+// ─── THE single map query (all active users with valid coordinates) ────────────
+/**
+ * Returns ALL active users who have valid numeric lat/lng.
+ * Role is NOT filtered — super admins, prefeita, assessors and citizens all appear
+ * on the map if they have coordinates.
+ * Run `fix:locationConfirmed` to backfill locationConfirmed on old records.
+ */
+export async function getConfirmedMapUsers() {
+  // Step 1: diagnostic — all active users regardless of coordinates
+  const allActiveUsers = await User
+    .find({ isActive: true })
+    .select("name role isActive latitude longitude locationConfirmed locationSource neighborhoodName neighborhood city state street number community")
+    .lean();
+
+  console.log(
+    "[ALL_ACTIVE_CITIZENS_FOR_MAP]",
+    allActiveUsers.map(u => ({
+      name: u.name,
+      role: u.role,
+      isActive: u.isActive,
+      latitude: u.latitude,
+      longitude: u.longitude,
+      locationConfirmed: u.locationConfirmed,
+      locationSource: u.locationSource
+    }))
+  );
+
+  // Step 2: keep only those with finite numeric coordinates
+  const confirmed = allActiveUsers.filter(u => {
+    const lat = u.latitude;
+    const lng = u.longitude;
+    return (
+      lat !== null && lat !== undefined && typeof lat === "number" && isFinite(lat) &&
+      lng !== null && lng !== undefined && typeof lng === "number" && isFinite(lng)
+    );
+  });
+
+  console.log(
+    "[CONFIRMED_CITIZENS_FOR_MAP]",
+    confirmed.map(u => ({
+      name: u.name,
+      role: u.role,
+      neighborhoodName: u.neighborhoodName,
+      latitude: u.latitude,
+      longitude: u.longitude,
+      locationConfirmed: u.locationConfirmed
+    }))
+  );
+
+  return confirmed;
+}
+
+/** @deprecated Use getConfirmedMapUsers instead */
+export const getConfirmedCitizenMapUsers = getConfirmedMapUsers;
+
+// ─── Legacy helpers (used by dashboard, mapUserStats, etc.) ────────────────────
 export function activeCitizenQuery(extra: Record<string, unknown> = {}) {
   return {
     role: citizenRoleFilter,
@@ -14,7 +77,12 @@ export function activeCitizenQuery(extra: Record<string, unknown> = {}) {
 export function missingUserCoordinateQuery(extra: Record<string, unknown> = {}) {
   return {
     ...activeCitizenQuery(extra),
-    $or: [{ latitude: { $exists: false } }, { longitude: { $exists: false } }, { latitude: null }, { longitude: null }]
+    $or: [
+      { latitude: { $exists: false } },
+      { longitude: { $exists: false } },
+      { latitude: null },
+      { longitude: null }
+    ]
   };
 }
 
@@ -64,10 +132,10 @@ export function normalizeUserCoordinates<T extends Record<string, any>>(payload:
 
 function firstNumber(...values: unknown[]) {
   for (const value of values) {
-    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "number" && isFinite(value)) return value;
     if (typeof value === "string" && value.trim() !== "") {
       const parsed = Number(value);
-      if (Number.isFinite(parsed)) return parsed;
+      if (isFinite(parsed)) return parsed;
     }
   }
   return undefined;

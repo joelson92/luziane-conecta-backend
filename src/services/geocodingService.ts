@@ -1,3 +1,5 @@
+import { AppError } from "../utils/http.js";
+
 type AddressInput = {
   street?: string;
   number?: string;
@@ -16,6 +18,7 @@ type GeocodeResult = {
   formattedAddress: string;
   confidence: number;
   provider: string;
+  precision?: "EXACT" | "APPROXIMATE";
 };
 
 const DEFAULT_COUNTRY = "Brasil";
@@ -39,10 +42,17 @@ export async function geocodeAddress(address: AddressInput): Promise<GeocodeResu
   const attempts = buildAddressAttempts(address);
   if (!attempts.length) return null;
 
-  for (const fullAddress of attempts) {
+  for (let i = 0; i < attempts.length; i++) {
+    const fullAddress = attempts[i];
     console.log("[GEOCODING_FULL_ADDRESS]", fullAddress);
     const result = await geocodeAddressText(fullAddress);
-    if (result) return result;
+    if (result) {
+      const precision = i === 0 ? "EXACT" : "APPROXIMATE";
+      return {
+        ...result,
+        precision
+      };
+    }
   }
 
   return null;
@@ -80,7 +90,10 @@ export async function enrichAddressFromZipCode<T extends Record<string, any>>(pa
   const cleanZipCode = normalizeZipCode(payload.zipCode);
   if (!cleanZipCode) return payload;
   const viaCep = await fetchAddressByZipCode(cleanZipCode);
-  if (!viaCep) return { ...payload, zipCode: cleanZipCode };
+  if (!viaCep) {
+    throw new AppError(400, "CEP não encontrado. Verifique o número informado.");
+  }
+
   return {
     ...payload,
     zipCode: cleanZipCode,
@@ -108,7 +121,7 @@ async function geocodeAddressText(fullAddress: string): Promise<GeocodeResult | 
 
   const response = await fetch(url, {
     headers: {
-      "User-Agent": "LuzianeConecta/1.0 contato@luzianeconecta.com"
+      "User-Agent": "LuzianeConectaAppProductionGeocodingService/2.0 (contato@luzianeconecta.com.br)"
     }
   });
   if (!response.ok) return null;
@@ -126,7 +139,26 @@ async function geocodeAddressText(fullAddress: string): Promise<GeocodeResult | 
   };
 }
 
+const SOURCE_PRIORITY: Record<string, number> = {
+  MANUAL_PIN: 4,
+  GPS: 3,
+  GEOCODING: 2,
+  AUTOCOMPLETE: 1
+};
+
 export async function enrichUserAddress<T extends Record<string, any>>(payload: T): Promise<T> {
+  const currentSource = payload.locationSource || "";
+  const currentPriority = SOURCE_PRIORITY[currentSource] ?? 0;
+
+  if (
+    typeof payload.latitude === "number" &&
+    typeof payload.longitude === "number" &&
+    currentPriority >= 2
+  ) {
+    console.log("[GEOCODING_SKIPPED] User already has confirmed location with higher or equal priority:", currentSource);
+    return payload;
+  }
+
   const address = normalizeAddress(payload);
   if (!hasAddress(address)) return payload;
   const next = { country: DEFAULT_COUNTRY, ...payload };
@@ -143,7 +175,8 @@ export async function enrichUserAddress<T extends Record<string, any>>(payload: 
       geocodedAt: new Date(),
       geocodingProvider: result.provider,
       geocodingStatus: "SUCCESS",
-      geocodingConfidence: result.confidence
+      geocodingConfidence: result.confidence,
+      geocodingPrecision: result.precision || "APPROXIMATE"
     };
   } catch {
     console.log("[GEOCODING_RESULT]", null);
@@ -214,7 +247,8 @@ function withFailedGeocoding<T extends Record<string, any>>(payload: T): T {
     latitude: null,
     longitude: null,
     geocodingProvider: "nominatim",
-    geocodingStatus: "FAILED"
+    geocodingStatus: "FAILED",
+    geocodingPrecision: "NONE"
   };
 }
 

@@ -82,9 +82,20 @@ userRoutes.patch("/:id/status", requireRoles("SUPER_ADMIN", "PREFEITA", "ASSESSO
 userRoutes.delete("/:id", requireRoles("SUPER_ADMIN", "PREFEITA", "ASSESSOR"), softDeleteUser);
 
 export const neighborhoodRoutes = Router();
-neighborhoodRoutes.get("/", requireAuth, requireRoles(...adminRoles), asyncHandler(async (_req, res) => {
-  const data = await Neighborhood.find({ isActive: true }).sort({ name: 1 });
-  console.log("[NEIGHBORHOODS]", data.map((item) => item.get("name")));
+neighborhoodRoutes.get("/", requireAuth, requireRoles(...adminRoles), asyncHandler(async (req, res) => {
+  const query: Record<string, any> = {};
+  if (req.query.city) {
+    query.city = new RegExp(`^${String(req.query.city).trim()}$`, "i");
+  }
+  if (req.query.state) {
+    query.state = new RegExp(`^${String(req.query.state).trim()}$`, "i");
+  }
+  if (req.query.isActive !== undefined) {
+    query.isActive = req.query.isActive === "true";
+  }
+
+  const data = await Neighborhood.find(query).sort({ name: 1 });
+  console.log("[NEIGHBORHOODS_FILTERED]", query, data.map((item) => item.get("name")));
   res.json({ data });
 }));
 neighborhoodRoutes.post("/", requireAuth, requireRoles(...adminRoles), neighborhoodCrud.create);

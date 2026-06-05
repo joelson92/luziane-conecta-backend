@@ -16,6 +16,7 @@ import { publicRoutes } from "./routes/publicRoutes.js";
 import { auditRoutes } from "./routes/auditRoutes.js";
 import { geocodingRoutes } from "./routes/geocodingRoutes.js";
 import { debugRoutes } from "./routes/debugRoutes.js";
+import { locationRoutes } from "./routes/locationRoutes.js";
 
 export const app = express();
 
@@ -61,6 +62,7 @@ app.use("/api/public", publicRoutes);
 app.use("/api/audit", auditRoutes);
 app.use("/api/geocoding", geocodingRoutes);
 app.use("/api/debug", debugRoutes);
+app.use("/api/locations", locationRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

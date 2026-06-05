@@ -10,7 +10,8 @@
     "start": "node dist/server.js",
     "seed": "tsx src/seed.ts",
     "migrate:neighborhoods": "tsx scripts/migrateNeighborhoods.ts",
-    "fix:addresses": "tsx scripts/fixUserAddressesAndGeocoding.ts"
+    "fix:addresses": "tsx scripts/fixUserAddressesAndGeocoding.ts",
+    "fix:locationConfirmed": "tsx scripts/fixLocationConfirmed.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.600.0",

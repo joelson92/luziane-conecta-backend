@@ -1,10 +1,11 @@
 import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
-import { CitizenActivity, Demand, Event, Survey, User } from "../models/index.js";
+import { CitizenActivity, Demand, Event, Survey, User, Neighborhood } from "../models/index.js";
 import { enrichAddressFromZipCode, enrichUserAddress } from "../services/geocodingService.js";
 import { buildNeighborhoodQuery, enrichNeighborhoodPayload, stripEmptyNeighborhoodId } from "../services/neighborhoodService.js";
 import { citizenRoleFilter, getCitizenGeoStats, normalizeUserCoordinates, validUserCoordinateQuery } from "../services/userGeoService.js";
 import { asyncHandler, AppError } from "../utils/http.js";
+import { normalizeNeighborhoodName } from "../utils/neighborhood.js";
 
 const safeSelect = "-passwordHash -refreshTokenHash";
 
@@ -34,7 +35,7 @@ export const getUser = asyncHandler(async (req, res) => {
 export const createUser = asyncHandler(async (req, res) => {
   console.log("[USER_RAW_BODY]", req.body);
   const passwordHash = await bcrypt.hash(req.body.password || "User@123456", 12);
-  const payload = normalizeUserCoordinates(await prepareUserPayload(sanitizeUserPayload({ ...req.body, role: normalizeRole(req.body.role || "CIDADAO"), passwordHash })));
+  const payload = normalizeUserCoordinates(await prepareUserPayload(sanitizeUserPayload({ ...req.body, role: normalizeRole(req.body.role || "CIDADAO"), passwordHash }), true));
   const user = await User.create(payload);
   const safe = await User.findById(user._id).select(safeSelect);
   res.status(201).json({ data: safe });
@@ -42,12 +43,57 @@ export const createUser = asyncHandler(async (req, res) => {
 
 export const updateUser = asyncHandler(async (req, res) => {
   console.log("[USER_RAW_BODY]", req.body);
-  const payload = normalizeUserCoordinates(await prepareUserPayload(sanitizeUserPayload({ ...req.body, role: req.body.role ? normalizeRole(req.body.role) : undefined })));
+  const user = await User.findById(req.params.id);
+  if (!user) throw new AppError(404, "User not found");
+
+  const cepChanged = user.zipCode !== req.body.zipCode;
+
+  const addressChanged =
+    user.zipCode !== req.body.zipCode ||
+    user.street !== req.body.street ||
+    user.number !== req.body.number ||
+    user.neighborhoodName !== req.body.neighborhoodName ||
+    user.city !== req.body.city ||
+    user.state !== req.body.state;
+
+  const oldUserAddress = {
+    zipCode: user.zipCode,
+    street: user.street,
+    number: user.number,
+    neighborhoodName: user.neighborhoodName,
+    city: user.city,
+    state: user.state
+  };
+  const newAddress = {
+    zipCode: req.body.zipCode,
+    street: req.body.street,
+    number: req.body.number,
+    neighborhoodName: req.body.neighborhoodName,
+    city: req.body.city,
+    state: req.body.state
+  };
+
+  console.log("[USER_ADDRESS_CHANGED]", addressChanged);
+  console.log("[OLD_ADDRESS]", oldUserAddress);
+  console.log("[NEW_ADDRESS]", newAddress);
+
+  if (cepChanged) {
+    console.log("[RECALCULATING_GEOCODING]");
+    req.body.latitude = undefined;
+    req.body.longitude = undefined;
+    req.body.geocodingStatus = undefined;
+
+    delete req.body.neighborhoodId;
+    if (req.body.address) {
+      delete req.body.address.neighborhoodId;
+    }
+  }
+
+  const payload = normalizeUserCoordinates(await prepareUserPayload(sanitizeUserPayload({ ...req.body, role: req.body.role ? normalizeRole(req.body.role) : undefined }), cepChanged, user));
   delete payload.passwordHash;
   delete payload.refreshTokenHash;
-  const user = await User.findByIdAndUpdate(req.params.id, compact(payload), { new: true }).select(safeSelect);
-  if (!user) throw new AppError(404, "User not found");
-  res.json({ data: user });
+  const updatedUser = await User.findByIdAndUpdate(req.params.id, compact(payload), { new: true }).select(safeSelect);
+  res.json({ data: updatedUser });
 });
 
 export const softDeleteUser = asyncHandler(async (req, res) => {
@@ -149,19 +195,62 @@ function compact(payload: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(sanitized).filter(([, value]) => value !== undefined && value !== ""));
 }
 
-async function prepareUserPayload(payload: Record<string, any>) {
+async function prepareUserPayload(payload: Record<string, any>, cepChanged: boolean, originalUser?: any) {
   const sanitized = sanitizeUserPayload(stripEmptyNeighborhoodId(payload));
   console.log("[USER_SANITIZED_BODY]", sanitized);
-  const withCep = await enrichAddressFromZipCode(sanitized);
-  validateCepAddress(withCep);
-  const withNeighborhood = await enrichNeighborhoodPayload(withCep);
-  const geocoded = await enrichUserAddress(sanitizeUserPayload(withNeighborhood));
-  return sanitizeUserPayload(geocoded);
+
+  // Normalize coordinates first to check if they are present
+  const normalized = normalizeUserCoordinates(sanitized);
+  if (typeof normalized.latitude === "number" && typeof normalized.longitude === "number") {
+    sanitized.latitude = normalized.latitude;
+    sanitized.longitude = normalized.longitude;
+    sanitized.locationConfirmed = true;
+    sanitized.locationSource = "MANUAL_PIN";
+    sanitized.locationConfirmedAt = new Date();
+    sanitized.geocodingStatus = "SUCCESS";
+    sanitized.geocodingPrecision = "MANUAL";
+  } else {
+    // If not supplied, keep original or default
+    sanitized.locationConfirmed = payload.locationConfirmed ?? false;
+    sanitized.locationSource = payload.locationSource || undefined;
+    sanitized.locationConfirmedAt = payload.locationConfirmedAt || originalUser?.locationConfirmedAt || undefined;
+  }
+
+  validateUserAddress(sanitized);
+
+  // Check neighborhood if it matches official active neighborhood, but do not block
+  const neighborhoodName = sanitized.neighborhoodName || sanitized.neighborhood;
+  if (neighborhoodName) {
+    const normName = normalizeNeighborhoodName(neighborhoodName);
+    const matchedNeighborhood = await Neighborhood.findOne({ normalizedName: normName, isActive: true });
+    if (matchedNeighborhood) {
+      sanitized.neighborhoodId = matchedNeighborhood._id;
+      sanitized.neighborhoodName = matchedNeighborhood.get("name");
+      sanitized.neighborhood = matchedNeighborhood.get("name");
+    } else {
+      sanitized.neighborhoodId = undefined;
+      sanitized.neighborhoodName = neighborhoodName.trim();
+      sanitized.neighborhood = neighborhoodName.trim();
+    }
+  }
+
+  return sanitizeUserPayload(sanitized);
 }
 
-function validateCepAddress(data: Record<string, any>) {
-  if (!data.street || !data.neighborhoodName || !data.city || !data.state) {
-    throw new AppError(400, "CEP invalido ou incompleto. Informe um CEP que retorne rua e bairro.");
+function validateUserAddress(data: Record<string, any>) {
+  if (!data.city || !data.state) {
+    throw new AppError(400, "Selecione o município.");
+  }
+  if (!data.street || (!data.neighborhoodName && !data.neighborhood) || !data.number) {
+    throw new AppError(400, "Preencha rua, bairro, cidade, estado e número para salvar o usuário.");
+  }
+  
+  // Only require coordinates for citizens
+  const isCitizen = data.role === "CIDADAO" || data.role === "citizen";
+  if (isCitizen) {
+    if (data.latitude === undefined || data.latitude === null || data.longitude === undefined || data.longitude === null || !data.locationConfirmed) {
+      throw new AppError(400, "Selecione a localização no mapa antes de salvar.");
+    }
   }
 }
 
