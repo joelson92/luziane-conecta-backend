@@ -1,7 +1,6 @@
-import { CitizenActivity, Demand, Event, Neighborhood, Notification, Post, Survey, SystemSettings, User } from "../models/index.js";
+import { CitizenActivity, Demand, Event, Notification, Post, Survey, SystemSettings, User } from "../models/index.js";
 import { citizenRoleFilter, validUserCoordinateQuery } from "../services/userGeoService.js";
 import { asyncHandler } from "../utils/http.js";
-import { normalizeNeighborhoodName } from "../utils/neighborhood.js";
 
 export const dashboard = asyncHandler(async (_req, res) => {
   const now = new Date();
@@ -163,7 +162,6 @@ export const adoption = asyncHandler(async (_req, res) => {
     usersWithCoordinates,
     topNeighborhoods,
     registrationsByMonth,
-    neighborhoods,
     settings
   ] = await Promise.all([
     User.countDocuments({ role: citizenRoleFilter }),
@@ -186,17 +184,17 @@ export const adoption = asyncHandler(async (_req, res) => {
       { $group: { _id: { $dateToString: { format: "%Y-%m", date: "$createdAt" } }, total: { $sum: 1 } } },
       { $sort: { _id: 1 } }
     ]),
-    Neighborhood.find({ isActive: true }).select("name centerLat centerLng"),
     SystemSettings.findOne()
   ]);
 
-  const countByNeighborhood = new Map(topNeighborhoods.map((item) => [normalizeNeighborhoodName(item._id || "Nao informado"), item.total]));
-  const lowAdhesionNeighborhoods = neighborhoods
+  // lowAdhesionNeighborhoods: bairros com MENOS usuários, derivado inteiramente de User.
+  // Não usa a coleção Neighborhood — User é a fonte única da verdade territorial.
+  const lowAdhesionNeighborhoods = topNeighborhoods
     .map((item) => ({
-      neighborhood: item.get("name"),
-      total: countByNeighborhood.get(normalizeNeighborhoodName(item.get("name"))) ?? 0,
-      latitude: item.get("centerLat"),
-      longitude: item.get("centerLng")
+      neighborhood: item._id || "Não informado",
+      total: item.total,
+      latitude: item.latitude,
+      longitude: item.longitude
     }))
     .sort((a, b) => a.total - b.total)
     .slice(0, 10);

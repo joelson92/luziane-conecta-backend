@@ -1,0 +1,223 @@
+import { AppError } from "../utils/http.js";
+const DEFAULT_COUNTRY = "Brasil";
+export function buildFullAddress(address) {
+    const neighborhood = address.neighborhoodName || address.neighborhood;
+    return [
+        [address.street, address.number].filter(Boolean).join(", "),
+        neighborhood,
+        address.community,
+        address.city,
+        address.state,
+        address.country || DEFAULT_COUNTRY,
+        address.zipCode
+    ]
+        .filter(Boolean)
+        .join(", ");
+}
+export async function geocodeAddress(address) {
+    const attempts = buildAddressAttempts(address);
+    if (!attempts.length)
+        return null;
+    for (let i = 0; i < attempts.length; i++) {
+        const fullAddress = attempts[i];
+        console.log("[GEOCODING_FULL_ADDRESS]", fullAddress);
+        const result = await geocodeAddressText(fullAddress);
+        if (result) {
+            const precision = i === 0 ? "EXACT" : "APPROXIMATE";
+            return {
+                ...result,
+                precision
+            };
+        }
+    }
+    return null;
+}
+export async function fetchAddressByZipCode(zipCode) {
+    const cleanZipCode = normalizeZipCode(zipCode);
+    if (!cleanZipCode)
+        return null;
+    console.log("[CEP_INPUT]", cleanZipCode);
+    const response = await fetch(`https://viacep.com.br/ws/${cleanZipCode}/json/`);
+    if (!response.ok)
+        return null;
+    const data = (await response.json());
+    console.log("[VIACEP_RESPONSE]", data);
+    if (data.erro)
+        return null;
+    return {
+        zipCode: cleanZipCode,
+        street: data.logradouro ?? "",
+        neighborhoodName: data.bairro ?? "",
+        neighborhood: data.bairro ?? "",
+        city: data.localidade ?? "",
+        state: data.uf ?? ""
+    };
+}
+export async function enrichAddressFromZipCode(payload) {
+    const cleanZipCode = normalizeZipCode(payload.zipCode);
+    if (!cleanZipCode)
+        return payload;
+    const viaCep = await fetchAddressByZipCode(cleanZipCode);
+    if (!viaCep) {
+        throw new AppError(400, "CEP não encontrado. Verifique o número informado.");
+    }
+    return {
+        ...payload,
+        zipCode: cleanZipCode,
+        street: payload.street || viaCep.street,
+        neighborhoodName: payload.neighborhoodName || payload.neighborhood || viaCep.neighborhoodName,
+        neighborhood: payload.neighborhood || payload.neighborhoodName || viaCep.neighborhoodName,
+        city: payload.city || viaCep.city,
+        state: payload.state || viaCep.state
+    };
+}
+export function normalizeZipCode(zipCode) {
+    const clean = String(zipCode ?? "").replace(/\D/g, "");
+    return clean.length === 8 ? clean : "";
+}
+async function geocodeAddressText(fullAddress) {
+    if (!fullAddress.trim())
+        return null;
+    const url = new URL("https://nominatim.openstreetmap.org/search");
+    url.searchParams.set("format", "jsonv2");
+    url.searchParams.set("limit", "1");
+    url.searchParams.set("countrycodes", "br");
+    url.searchParams.set("q", fullAddress);
+    const response = await fetch(url, {
+        headers: {
+            "User-Agent": "LuzianeConectaAppProductionGeocodingService/2.0 (contato@luzianeconecta.com.br)"
+        }
+    });
+    if (!response.ok)
+        return null;
+    const data = (await response.json());
+    const first = data[0];
+    if (!first)
+        return null;
+    return {
+        latitude: Number(first.lat),
+        longitude: Number(first.lon),
+        formattedAddress: first.display_name,
+        confidence: Number(first.importance ?? 0.7),
+        provider: "nominatim"
+    };
+}
+const SOURCE_PRIORITY = {
+    MANUAL_PIN: 4,
+    GPS: 3,
+    GEOCODING: 2,
+    AUTOCOMPLETE: 1
+};
+export async function enrichUserAddress(payload) {
+    const currentSource = payload.locationSource || "";
+    const currentPriority = SOURCE_PRIORITY[currentSource] ?? 0;
+    if (typeof payload.latitude === "number" &&
+        typeof payload.longitude === "number" &&
+        currentPriority >= 2) {
+        console.log("[GEOCODING_SKIPPED] User already has confirmed location with higher or equal priority:", currentSource);
+        return payload;
+    }
+    const address = normalizeAddress(payload);
+    if (!hasAddress(address))
+        return payload;
+    const next = { country: DEFAULT_COUNTRY, ...payload };
+    try {
+        const result = await geocodeAddress(address);
+        console.log("[GEOCODING_RESULT]", result);
+        if (!result)
+            return withFailedGeocoding(next);
+        return {
+            ...next,
+            latitude: result.latitude,
+            longitude: result.longitude,
+            formattedAddress: result.formattedAddress,
+            geocodedAt: new Date(),
+            geocodingProvider: result.provider,
+            geocodingStatus: "SUCCESS",
+            geocodingConfidence: result.confidence,
+            geocodingPrecision: result.precision || "APPROXIMATE"
+        };
+    }
+    catch {
+        console.log("[GEOCODING_RESULT]", null);
+        return withFailedGeocoding(next);
+    }
+}
+export async function enrichDemandAddress(payload) {
+    if (payload.location?.lat && payload.location?.lng)
+        return payload;
+    const source = payload.location?.source ?? "address";
+    if (source !== "address")
+        return payload;
+    const address = normalizeAddress({ ...payload.address, neighborhood: payload.neighborhood, community: payload.community });
+    if (!hasAddress(address))
+        return payload;
+    try {
+        const result = await geocodeAddress(address);
+        if (!result) {
+            return {
+                ...payload,
+                location: { ...(payload.location ?? {}), source: "address" },
+                address: { ...payload.address, ...address, geocodingStatus: "failed", geocodingProvider: "openstreetmap-nominatim" }
+            };
+        }
+        return {
+            ...payload,
+            location: { lat: result.latitude, lng: result.longitude, source: "address" },
+            address: {
+                ...payload.address,
+                ...address,
+                formattedAddress: result.formattedAddress,
+                geocodedAt: new Date(),
+                geocodingProvider: result.provider,
+                geocodingStatus: "success",
+                geocodingConfidence: result.confidence
+            }
+        };
+    }
+    catch {
+        return {
+            ...payload,
+            location: { ...(payload.location ?? {}), source: "address" },
+            address: { ...payload.address, ...address, geocodingStatus: "failed", geocodingProvider: "openstreetmap-nominatim" }
+        };
+    }
+}
+function normalizeAddress(payload) {
+    return {
+        street: payload.street,
+        number: payload.number,
+        neighborhood: payload.neighborhood,
+        neighborhoodName: payload.neighborhoodName,
+        community: payload.community,
+        city: payload.city,
+        state: payload.state,
+        country: payload.country || DEFAULT_COUNTRY,
+        zipCode: payload.zipCode
+    };
+}
+function hasAddress(address) {
+    return Boolean(address.street || address.neighborhoodName || address.neighborhood || address.community || address.city || address.state || address.zipCode);
+}
+function withFailedGeocoding(payload) {
+    return {
+        ...payload,
+        latitude: null,
+        longitude: null,
+        geocodingProvider: "nominatim",
+        geocodingStatus: "FAILED",
+        geocodingPrecision: "NONE"
+    };
+}
+function buildAddressAttempts(address) {
+    const neighborhood = address.neighborhoodName || address.neighborhood;
+    const attempts = [
+        [[address.street, address.number].filter(Boolean).join(", "), neighborhood, address.city, address.state, DEFAULT_COUNTRY],
+        [address.street, neighborhood, address.city, address.state, DEFAULT_COUNTRY],
+        [neighborhood, address.city, address.state, DEFAULT_COUNTRY],
+        [address.city, address.state, DEFAULT_COUNTRY]
+    ]
+        .map((parts) => parts.filter(Boolean).join(", "))
+        .filter((value) => value.trim().length > 0);
+    return Array.from(new Set(attempts));
+}

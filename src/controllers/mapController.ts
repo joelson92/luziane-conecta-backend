@@ -84,6 +84,58 @@ export const mapNeighborhoods = asyncHandler(async (_req, res) => {
   res.json(neighborhoods);
 });
 
+/**
+ * GET /api/map/neighborhoods-stats
+ * Retorna bairros com contagens detalhadas — fonte única: coleção User.
+ * Sem Neighborhood collection. Sem dados fixos.
+ */
+export const mapNeighborhoodStats = asyncHandler(async (_req, res) => {
+  const result = await User.aggregate([
+    {
+      $match: {
+        isActive: true,
+        $or: [
+          { neighborhood: { $exists: true, $nin: [null, ""] } },
+          { neighborhoodName: { $exists: true, $nin: [null, ""] } }
+        ]
+      }
+    },
+    {
+      $group: {
+        _id: { $ifNull: ["$neighborhoodName", "$neighborhood"] },
+        totalUsers: { $sum: 1 },
+        geolocatedUsers: {
+          $sum: {
+            $cond: [
+              { $and: [{ $isNumber: "$latitude" }, { $isNumber: "$longitude" }] },
+              1,
+              0
+            ]
+          }
+        },
+        city: { $first: "$city" },
+        state: { $first: "$state" }
+      }
+    },
+    {
+      $project: {
+        _id: 0,
+        name: "$_id",
+        totalUsers: 1,
+        geolocatedUsers: 1,
+        city: 1,
+        state: 1
+      }
+    },
+    { $match: { name: { $nin: [null, ""] } } },
+    { $sort: { totalUsers: -1 } }
+  ]);
+
+  res.json(result);
+});
+
+
+
 // ─── Map Heatmap ───────────────────────────────────────────────────────────────
 export const mapHeatmap = asyncHandler(async (req, res) => {
   const confirmedUsers = await getConfirmedMapUsers();
@@ -164,4 +216,45 @@ export const geocodeAddressEndpoint = asyncHandler(async (req, res) => {
   const result = await geocodeAddress(req.body);
   if (!result) throw new AppError(404, "Address could not be geocoded");
   res.json({ data: result });
+});
+
+// ─── Dados dinâmicos para filtros da Central de Notificações ──────────────────
+// Fonte única: coleção User. Sem cadastros manuais.
+
+/** GET /api/map/communities — lista dinâmica de comunidades dos usuários ativos */
+export const mapCommunities = asyncHandler(async (_req, res) => {
+  const communities = await User.distinct("community", {
+    isActive: true,
+    community: { $nin: [null, ""] }
+  });
+  const sorted = communities
+    .map((c: string) => String(c).trim())
+    .filter(Boolean)
+    .sort((a: string, b: string) => a.localeCompare(b, "pt-BR"));
+  res.json(sorted);
+});
+
+/** GET /api/map/interests — lista dinâmica de interesses dos usuários ativos */
+export const mapInterests = asyncHandler(async (_req, res) => {
+  const result = await User.aggregate([
+    { $match: { isActive: true, interests: { $exists: true, $not: { $size: 0 } } } },
+    { $unwind: "$interests" },
+    { $match: { interests: { $nin: [null, ""] } } },
+    { $group: { _id: "$interests" } },
+    { $sort: { _id: 1 } }
+  ]);
+  res.json(result.map((item: { _id: string }) => item._id).filter(Boolean));
+});
+
+/** GET /api/map/profiles — lista dinâmica de perfis dos usuários ativos */
+export const mapProfiles = asyncHandler(async (_req, res) => {
+  const profiles = await User.distinct("profile", {
+    isActive: true,
+    profile: { $nin: [null, ""] }
+  });
+  const sorted = profiles
+    .map((p: string) => String(p).trim())
+    .filter(Boolean)
+    .sort((a: string, b: string) => a.localeCompare(b, "pt-BR"));
+  res.json(sorted);
 });

@@ -2,13 +2,14 @@ import { Types } from "mongoose";
 import { User } from "../models/index.js";
 import type { Role } from "../types.js";
 
-export type TargetType = "ALL" | "NEIGHBORHOOD" | "COMMUNITY" | "AGE_RANGE" | "INTERESTS" | "ROLE" | "SPECIFIC_USERS";
+export type TargetType = "ALL" | "NEIGHBORHOOD" | "COMMUNITY" | "AGE_RANGE" | "INTERESTS" | "ROLE" | "PROFILE" | "SPECIFIC_USERS";
 
 export type TargetFilters = {
   neighborhoods?: string[];
   communities?: string[];
   interests?: string[];
   roles?: string[];
+  profiles?: string[];
   ageMin?: number;
   ageMax?: number;
   userIds?: string[];
@@ -20,6 +21,7 @@ type TargetUser = {
   birthDate?: Date;
   neighborhood?: string;
   community?: string;
+  profile?: string;
   interests?: string[];
   fcmToken?: string;
   fcmTokens?: string[];
@@ -30,15 +32,15 @@ export async function resolveNotificationTargets(targetType: TargetType, filters
   const normalizedFilters = normalizeFilters(filters);
   const query: Record<string, unknown> = { isActive: true };
 
-  if (normalizedType === "ALL") query.role = "CIDADAO";
   if (normalizedType === "NEIGHBORHOOD") query.neighborhood = { $in: normalizedFilters.neighborhoods };
   if (normalizedType === "COMMUNITY") query.community = { $in: normalizedFilters.communities };
   if (normalizedType === "INTERESTS") query.interests = { $in: normalizedFilters.interests };
   if (normalizedType === "ROLE") query.role = { $in: normalizedFilters.roles };
+  if (normalizedType === "PROFILE") query.profile = { $in: normalizedFilters.profiles };
   if (normalizedType === "SPECIFIC_USERS") query._id = { $in: normalizedFilters.userIds };
 
   let users = await User.find(query)
-    .select("_id role birthDate neighborhood community interests fcmToken fcmTokens")
+    .select("_id role birthDate neighborhood community profile interests fcmToken fcmTokens")
     .lean<TargetUser[]>();
 
   if (normalizedType === "AGE_RANGE") {
@@ -55,7 +57,8 @@ export async function resolveNotificationTargets(targetType: TargetType, filters
     breakdown: {
       byNeighborhood: groupBy(recipients, "neighborhood"),
       byCommunity: groupBy(recipients, "community"),
-      byRole: groupBy(recipients, "role")
+      byRole: groupBy(recipients, "role"),
+      byProfile: groupBy(recipients, "profile")
     }
   };
 }
@@ -67,12 +70,14 @@ export function normalizeTargetType(targetType?: string): TargetType {
     COMUNIDADE: "COMMUNITY",
     FAIXA_ETARIA: "AGE_RANGE",
     INTERESSES: "INTERESTS",
+    PERFIL: "PROFILE",
     ALL: "ALL",
     NEIGHBORHOOD: "NEIGHBORHOOD",
     COMMUNITY: "COMMUNITY",
     AGE_RANGE: "AGE_RANGE",
     INTERESTS: "INTERESTS",
     ROLE: "ROLE",
+    PROFILE: "PROFILE",
     SPECIFIC_USERS: "SPECIFIC_USERS"
   };
   return map[String(targetType || "ALL").toUpperCase()] ?? "ALL";
@@ -84,6 +89,7 @@ export function normalizeFilters(filters: TargetFilters = {}) {
     communities: toStringArray(filters.communities),
     interests: toStringArray(filters.interests),
     roles: toStringArray(filters.roles).map(normalizeRole),
+    profiles: toStringArray(filters.profiles),
     ageMin: optionalNumber(filters.ageMin),
     ageMax: optionalNumber(filters.ageMax),
     userIds: toStringArray(filters.userIds).filter((id) => Types.ObjectId.isValid(id))
@@ -113,7 +119,8 @@ function calculateAge(birthDate: Date) {
 function groupBy(users: TargetUser[], field: keyof TargetUser) {
   const grouped = new Map<string, number>();
   for (const user of users) {
-    const key = String(user[field] || "Nao informado");
+    const raw = user[field];
+    const key = String(Array.isArray(raw) ? raw[0] : raw || "Não informado");
     grouped.set(key, (grouped.get(key) ?? 0) + 1);
   }
   return Array.from(grouped.entries())

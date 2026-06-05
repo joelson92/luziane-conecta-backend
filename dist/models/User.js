@@ -1,16 +1,13 @@
 import mongoose, { Schema } from "mongoose";
-import type { Role } from "../types.js";
-
-const userSchema = new Schema(
-  {
+const userSchema = new Schema({
     name: { type: String, required: true, trim: true },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     phone: { type: String, trim: true },
     passwordHash: { type: String, required: true },
     role: {
-      type: String,
-      enum: ["SUPER_ADMIN", "PREFEITA", "ASSESSOR", "CIDADAO"] satisfies Role[],
-      default: "CIDADAO"
+        type: String,
+        enum: ["SUPER_ADMIN", "PREFEITA", "ASSESSOR", "CIDADAO"],
+        default: "CIDADAO"
     },
     birthDate: Date,
     street: String,
@@ -47,10 +44,7 @@ const userSchema = new Schema(
     lastLoginAt: Date,
     appInstalledAt: Date,
     refreshTokenHash: String
-  },
-  { timestamps: true }
-);
-
+}, { timestamps: true });
 // ─── Índices para segmentação de notificações e performance de consultas ────
 userSchema.index({ neighborhood: 1 });
 userSchema.index({ community: 1 });
@@ -62,5 +56,4 @@ userSchema.index({ isActive: 1, fcmToken: 1 });
 userSchema.index({ isActive: 1, role: 1 });
 userSchema.index({ isActive: 1, neighborhood: 1 });
 userSchema.index({ isActive: 1, community: 1 });
-
 export const User = mongoose.model("User", userSchema);
