@@ -5,22 +5,23 @@ import { AccountDeletionAudit, PasswordReset, User, UserConsent } from "../model
 import { asyncHandler, AppError } from "../utils/http.js";
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from "../services/tokenService.js";
 import { enrichAddressFromZipCode, enrichUserAddress } from "../services/geocodingService.js";
-import { enrichNeighborhoodPayload } from "../services/neighborhoodService.js";
+import { normalizeRole } from "../middleware/auth.js";
+import type { Role } from "../types.js";
 
 export const registerSchema = z.object({
   name: z.string().min(2),
   email: z.string().email(),
-  phone: z.string().min(8),
+  phone: z.string().refine((value) => value.replace(/\D/g, "").length >= 8, "Phone must include at least 8 digits"),
   password: z.string().min(8),
   birthDate: z.coerce.date().optional(),
-  neighborhoodId: z.string().optional(),
   neighborhoodName: z.string().optional(),
-  neighborhood: z.string().optional(),
+  neighborhood: z.string().min(2),
   community: z.string().optional(),
   street: z.string().optional(),
   number: z.string().optional(),
   complement: z.string().optional(),
-  city: z.string().optional(),
+  address: z.string().optional(),
+  city: z.string().min(2),
   state: z.string().optional(),
   zipCode: z.string().optional(),
   interests: z.array(z.string()).optional(),
@@ -33,7 +34,10 @@ export const registerSchema = z.object({
   acceptedPrivacyVersion: z.string().optional(),
   location: z.object({
     type: z.literal("Point"),
-    coordinates: z.array(z.number()).length(2),
+    coordinates: z.tuple([
+      z.number().min(-180).max(180),
+      z.number().min(-90).max(90)
+    ]),
     source: z.enum(["GPS", "MANUAL_PIN"]),
     confirmed: z.literal(true)
   })
@@ -60,20 +64,41 @@ export const resetPasswordSchema = z.object({
   password: z.string().min(8)
 });
 
-function publicUser(user: any) {
+const allowedRoles: Role[] = ["SUPER_ADMIN", "PREFEITA", "ASSESSOR", "CIDADAO"];
+
+function publicUser(user: any, overrides: Record<string, unknown> = {}) {
   const data = user.toObject();
   data.id = user.id;
+  Object.assign(data, overrides);
   delete data.passwordHash;
   delete data.refreshTokenHash;
   return data;
 }
 
-async function consentStatus(userId: string) {
+async function consentStatus(user: any) {
+  const userId = user.id;
   const consent = await UserConsent.findOne({ userId, acceptedTerms: true, acceptedPrivacy: true }).sort({ acceptedAt: -1 });
+  const acceptedOnUser = Boolean(user.get("acceptedTerms") && user.get("acceptedPrivacy"));
   return {
-    hasAcceptedLegalTerms: Boolean(consent),
-    consentAcceptedAt: consent?.get("acceptedAt") ?? null
+    hasAcceptedLegalTerms: Boolean(consent) || acceptedOnUser,
+    consentAcceptedAt: consent?.get("acceptedAt") ?? user.get("acceptedTermsAt") ?? user.get("acceptedPrivacyAt") ?? null
   };
+}
+
+function isAllowedRole(role: string): role is Role {
+  return allowedRoles.includes(role as Role);
+}
+
+function hasInvalidLocation(location: unknown) {
+  if (!location) return false;
+  const value = location as { type?: unknown; coordinates?: unknown };
+  const coordinates = value.coordinates;
+  return !(
+    value.type === "Point" &&
+    Array.isArray(coordinates) &&
+    coordinates.length === 2 &&
+    coordinates.every((coordinate) => typeof coordinate === "number" && Number.isFinite(coordinate))
+  );
 }
 
 export const register = asyncHandler(async (req, res) => {
@@ -93,6 +118,7 @@ export const register = asyncHandler(async (req, res) => {
     street,
     number,
     complement,
+    address,
     city,
     state,
     zipCode,
@@ -118,6 +144,8 @@ export const register = asyncHandler(async (req, res) => {
     street,
     number,
     complement,
+    address,
+    formattedAddress: address,
     city,
     state,
     zipCode,
@@ -146,11 +174,7 @@ export const register = asyncHandler(async (req, res) => {
     acceptedPrivacyVersion: acceptedPrivacyVersion || "1.0"
   };
 
-  const userPayload = await enrichUserAddress(
-    await enrichNeighborhoodPayload(
-      await enrichAddressFromZipCode(rawPayload)
-    )
-  );
+  const userPayload = await enrichUserAddress(await enrichAddressFromZipCode(rawPayload));
 
   const user = await User.create(userPayload);
 
@@ -180,18 +204,36 @@ export const register = asyncHandler(async (req, res) => {
 });
 
 export const login = asyncHandler(async (req, res) => {
-  const user = await User.findOne({ email: req.body.email, isActive: true });
+  const emailLower = String(req.body.email || "").toLowerCase().trim();
+  const user = await User.findOne({ email: emailLower, isActive: true });
   if (!user) throw new AppError(401, "Invalid credentials");
-  const ok = await bcrypt.compare(req.body.password, user.get("passwordHash"));
+  const passwordHash = user.get("passwordHash");
+  if (typeof passwordHash !== "string" || !passwordHash) throw new AppError(401, "Invalid credentials");
+  const ok = await bcrypt.compare(req.body.password, passwordHash);
   if (!ok) throw new AppError(401, "Invalid credentials");
 
-  const payload = { id: user.id, email: user.get("email"), role: user.get("role") };
+  const role = normalizeRole(String(user.get("role") || "CIDADAO"));
+  if (!isAllowedRole(role)) throw new AppError(403, "User role is not allowed");
+
+  const payload = { id: user.id, email: user.get("email"), role };
   const accessToken = signAccessToken(payload);
   const refreshToken = signRefreshToken(payload);
-  user.set("refreshTokenHash", await bcrypt.hash(refreshToken, 10));
-  user.set("lastLoginAt", new Date());
-  await user.save();
-  res.json({ user: publicUser(user), token: accessToken, accessToken, refreshToken, ...(await consentStatus(user.id)) });
+  const now = new Date();
+  const update: Record<string, unknown> = {
+    $set: {
+      refreshTokenHash: await bcrypt.hash(refreshToken, 10),
+      lastLoginAt: now,
+      role
+    }
+  };
+  if (hasInvalidLocation(user.get("location"))) {
+    update.$unset = { location: "" };
+    user.set("location", undefined);
+  }
+  await User.updateOne({ _id: user._id }, update);
+  user.set("role", role);
+  user.set("lastLoginAt", now);
+  res.json({ user: publicUser(user, { role, lastLoginAt: now }), token: accessToken, accessToken, refreshToken, ...(await consentStatus(user)) });
 });
 
 export const refresh = asyncHandler(async (req, res) => {
@@ -204,14 +246,16 @@ export const refresh = asyncHandler(async (req, res) => {
   if (!refreshTokenHash) throw new AppError(401, "Invalid refresh token");
   const ok = await bcrypt.compare(token, refreshTokenHash);
   if (!ok) throw new AppError(401, "Invalid refresh token");
-  const accessToken = signAccessToken({ id: user.id, email: user.get("email"), role: user.get("role") });
+  const role = normalizeRole(String(user.get("role") || "CIDADAO"));
+  if (!isAllowedRole(role)) throw new AppError(403, "User role is not allowed");
+  const accessToken = signAccessToken({ id: user.id, email: user.get("email"), role });
   res.json({ token: accessToken, accessToken });
 });
 
 export const me = asyncHandler(async (req: any, res) => {
   const user = await User.findById(req.user.id);
   if (!user) throw new AppError(404, "User not found");
-  res.json({ user: publicUser(user), ...(await consentStatus(user.id)) });
+  res.json({ user: publicUser(user), ...(await consentStatus(user)) });
 });
 
 export const acceptConsent = asyncHandler(async (req: any, res) => {

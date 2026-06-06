@@ -32,12 +32,15 @@ export function requireRoles(...roles: Role[]) {
 
 export const adminRoles: Role[] = ["SUPER_ADMIN", "PREFEITA", "ASSESSOR"];
 
-function normalizeRole(role: string): Role {
+export function normalizeRole(role: string): Role {
   const map: Record<string, Role> = {
+    admin: "SUPER_ADMIN",
     superadmin: "SUPER_ADMIN",
     super_admin: "SUPER_ADMIN",
     mayor: "PREFEITA",
+    prefeita: "PREFEITA",
     lideranca: "PREFEITA",
+    lideranca_publica: "PREFEITA",
     advisor: "ASSESSOR",
     assessor: "ASSESSOR",
     citizen: "CIDADAO",

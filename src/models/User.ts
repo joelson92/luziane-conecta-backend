@@ -16,6 +16,7 @@ const userSchema = new Schema(
     street: String,
     number: String,
     complement: String,
+    address: String,
     neighborhoodId: { type: Schema.Types.ObjectId, ref: "Neighborhood" },
     neighborhoodName: String,
     neighborhood: String,
@@ -36,7 +37,7 @@ const userSchema = new Schema(
     locationConfirmedAt: Date,
     locationSource: { type: String, enum: ["AUTOCOMPLETE", "GEOCODING", "MANUAL_PIN", "GPS"] },
     location: {
-      type: { type: String, enum: ["Point"], default: "Point" },
+      type: { type: String, enum: ["Point"] },
       coordinates: [Number],
       source: String,
       confirmed: Boolean
@@ -65,6 +66,26 @@ const userSchema = new Schema(
 );
 
 // ─── Índices para segmentação de notificações e performance de consultas ────
+userSchema.pre("validate", function removeInvalidEmptyLocation(next) {
+  const location = this.get("location") as { type?: string; coordinates?: unknown[] } | undefined;
+  if (!location) {
+    next();
+    return;
+  }
+
+  const hasValidPoint =
+    location.type === "Point" &&
+    Array.isArray(location.coordinates) &&
+    location.coordinates.length === 2 &&
+    location.coordinates.every((value) => typeof value === "number" && Number.isFinite(value));
+
+  if (!hasValidPoint) {
+    this.set("location", undefined);
+  }
+
+  next();
+});
+
 userSchema.index({ neighborhood: 1 });
 userSchema.index({ community: 1 });
 userSchema.index({ role: 1 });
