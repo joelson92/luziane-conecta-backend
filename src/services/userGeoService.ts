@@ -24,19 +24,6 @@ export async function getConfirmedMapUsers() {
     .select("name role isActive latitude longitude locationConfirmed locationSource neighborhoodName neighborhood city state street number community")
     .lean();
 
-  console.log(
-    "[ALL_ACTIVE_CITIZENS_FOR_MAP]",
-    allActiveUsers.map(u => ({
-      name: u.name,
-      role: u.role,
-      isActive: u.isActive,
-      latitude: u.latitude,
-      longitude: u.longitude,
-      locationConfirmed: u.locationConfirmed,
-      locationSource: u.locationSource
-    }))
-  );
-
   // Step 2: keep only those with finite numeric coordinates
   const confirmed = allActiveUsers.filter(u => {
     const lat = u.latitude;
@@ -46,18 +33,6 @@ export async function getConfirmedMapUsers() {
       lng !== null && lng !== undefined && typeof lng === "number" && isFinite(lng)
     );
   });
-
-  console.log(
-    "[CONFIRMED_CITIZENS_FOR_MAP]",
-    confirmed.map(u => ({
-      name: u.name,
-      role: u.role,
-      neighborhoodName: u.neighborhoodName,
-      latitude: u.latitude,
-      longitude: u.longitude,
-      locationConfirmed: u.locationConfirmed
-    }))
-  );
 
   return confirmed;
 }

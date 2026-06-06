@@ -9,16 +9,13 @@ export function requireAuth(req: AuthRequest, _res: Response, next: NextFunction
   const match = authorization?.match(/^Bearer\s+(.+)$/i);
   const token = match?.[1];
   if (!token) {
-    console.log("[AUTH_HEADER_MISSING]", authorization);
     throw new AppError(401, "Authentication required");
   }
 
   try {
     req.user = jwt.verify(token, env.JWT_SECRET) as AuthRequest["user"];
-    console.log("[AUTH_USER]", req.user?.id, req.user?.role);
     next();
   } catch (error) {
-    console.log("[AUTH_ERROR]", error instanceof Error ? error.message : error);
     throw new AppError(401, "Invalid or expired token");
   }
 }

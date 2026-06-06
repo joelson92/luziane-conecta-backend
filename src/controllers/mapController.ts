@@ -24,7 +24,6 @@ export const mapUsers = asyncHandler(async (_req, res) => {
     locationSource: (user as any).locationSource ?? "MANUAL_PIN"
   }));
 
-  console.log("[MAP_USERS_API_RESPONSE] count:", data.length);
   res.json(data);
 });
 
@@ -80,7 +79,6 @@ export const mapNeighborhoods = asyncHandler(async (_req, res) => {
     a.name.localeCompare(b.name, "pt-BR")
   );
 
-  console.log("[MAP_NEIGHBORHOODS_FROM_USERS]", neighborhoods);
   res.json(neighborhoods);
 });
 

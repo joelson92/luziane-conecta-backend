@@ -35,9 +35,22 @@ const userSchema = new Schema(
     locationConfirmed: { type: Boolean, default: false },
     locationConfirmedAt: Date,
     locationSource: { type: String, enum: ["AUTOCOMPLETE", "GEOCODING", "MANUAL_PIN", "GPS"] },
+    location: {
+      type: { type: String, enum: ["Point"], default: "Point" },
+      coordinates: [Number],
+      source: String,
+      confirmed: Boolean
+    },
+    acceptedTerms: { type: Boolean, default: false },
+    acceptedPrivacy: { type: Boolean, default: false },
+    acceptedTermsAt: Date,
+    acceptedPrivacyAt: Date,
+    acceptedTermsVersion: String,
+    acceptedPrivacyVersion: String,
     avatarUrl: String,
     /** Perfil profissional/social do usuário (agricultor, pescador, comerciante, etc.) */
     profile: { type: String, trim: true },
+    gender: String,
     interests: [String],
     fcmToken: String,
     fcmTokens: [String],
@@ -62,5 +75,6 @@ userSchema.index({ isActive: 1, fcmToken: 1 });
 userSchema.index({ isActive: 1, role: 1 });
 userSchema.index({ isActive: 1, neighborhood: 1 });
 userSchema.index({ isActive: 1, community: 1 });
+userSchema.index({ location: "2dsphere" });
 
 export const User = mongoose.model("User", userSchema);

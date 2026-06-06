@@ -39,8 +39,6 @@ export async function resolveNeighborhood(input: { neighborhoodId?: unknown; nei
 
 export async function enrichNeighborhoodPayload<T extends Payload>(payload: T): Promise<T> {
   const cleanPayload = stripEmptyNeighborhoodId(payload);
-  console.log("[NEIGHBORHOOD_NAME]", cleanPayload.neighborhoodName ?? cleanPayload.address?.neighborhoodName);
-  console.log("[NEIGHBORHOOD_INPUT]", cleanPayload.neighborhoodName ?? cleanPayload.address?.neighborhoodName, cleanPayload.neighborhoodId ?? cleanPayload.address?.neighborhoodId);
   const neighborhood = await resolveNeighborhood({
     neighborhoodId: cleanPayload.neighborhoodId ?? cleanPayload.address?.neighborhoodId,
     neighborhoodName: cleanPayload.neighborhoodName ?? cleanPayload.address?.neighborhoodName,
@@ -48,7 +46,6 @@ export async function enrichNeighborhoodPayload<T extends Payload>(payload: T): 
     city: cleanPayload.city ?? cleanPayload.address?.city,
     state: cleanPayload.state ?? cleanPayload.address?.state
   });
-  console.log("[NEIGHBORHOOD_RESOLVED]", neighborhood?._id, neighborhood?.get("name"));
   if (!neighborhood) return cleanPayload as T;
 
   const next: Payload = {
@@ -78,7 +75,6 @@ export async function buildNeighborhoodQuery(input: { neighborhoodId?: unknown; 
     if (neighborhood?.get("name")) {
       clauses.push({ neighborhoodName: neighborhood.get("name") }, { neighborhood: neighborhood.get("name") });
     }
-    console.log("[MAP_FILTER_NEIGHBORHOOD]", id);
     return { $or: clauses };
   }
 
@@ -91,13 +87,11 @@ export async function buildNeighborhoodQuery(input: { neighborhoodId?: unknown; 
   if (neighborhood?._id) clauses.push({ neighborhoodId: neighborhood._id });
   const displayName = neighborhood?.get("name") || displayNeighborhoodName(rawName);
   clauses.push({ neighborhoodName: displayName }, { neighborhood: displayName });
-  console.log("[MAP_FILTER_NEIGHBORHOOD]", neighborhood?._id?.toString() ?? normalizedName);
   return { $or: clauses };
 }
 
 export async function activeNeighborhoods() {
   const neighborhoods = await Neighborhood.find({ isActive: true }).sort({ name: 1 });
-  console.log("[NEIGHBORHOODS]", neighborhoods.map((item) => item.get("name")));
   return neighborhoods;
 }
 

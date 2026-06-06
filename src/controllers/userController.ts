@@ -33,7 +33,6 @@ export const getUser = asyncHandler(async (req, res) => {
 });
 
 export const createUser = asyncHandler(async (req, res) => {
-  console.log("[USER_RAW_BODY]", req.body);
   const passwordHash = await bcrypt.hash(req.body.password || "User@123456", 12);
   const payload = normalizeUserCoordinates(await prepareUserPayload(sanitizeUserPayload({ ...req.body, role: normalizeRole(req.body.role || "CIDADAO"), passwordHash }), true));
   const user = await User.create(payload);
@@ -42,7 +41,6 @@ export const createUser = asyncHandler(async (req, res) => {
 });
 
 export const updateUser = asyncHandler(async (req, res) => {
-  console.log("[USER_RAW_BODY]", req.body);
   const user = await User.findById(req.params.id);
   if (!user) throw new AppError(404, "User not found");
 
@@ -73,12 +71,7 @@ export const updateUser = asyncHandler(async (req, res) => {
     state: req.body.state
   };
 
-  console.log("[USER_ADDRESS_CHANGED]", addressChanged);
-  console.log("[OLD_ADDRESS]", oldUserAddress);
-  console.log("[NEW_ADDRESS]", newAddress);
-
   if (cepChanged) {
-    console.log("[RECALCULATING_GEOCODING]");
     req.body.latitude = undefined;
     req.body.longitude = undefined;
     req.body.geocodingStatus = undefined;
@@ -128,9 +121,6 @@ export const usersOverview = asyncHandler(async (_req, res) => {
     citizenUsersWithoutGeo: citizenGeoStats.withoutGeo,
     neighborhoodsWithUsers
   };
-  console.log("[USER_STATS]", stats);
-  console.log("[USERS_WITHOUT_NEIGHBORHOOD_ID]", usersWithoutNeighborhoodId);
-  console.log("[USERS_BY_NEIGHBORHOOD]", usersByNeighborhoodResult);
   res.json(stats);
 });
 
@@ -197,7 +187,6 @@ function compact(payload: Record<string, unknown>) {
 
 async function prepareUserPayload(payload: Record<string, any>, cepChanged: boolean, originalUser?: any) {
   const sanitized = sanitizeUserPayload(stripEmptyNeighborhoodId(payload));
-  console.log("[USER_SANITIZED_BODY]", sanitized);
 
   // Normalize coordinates first to check if they are present
   const normalized = normalizeUserCoordinates(sanitized);

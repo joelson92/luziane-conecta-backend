@@ -1,5 +1,6 @@
 export { User } from "./User.js";
 export { Post } from "./Post.js";
+export { Video } from "./Video.js";
 export { Demand } from "./Demand.js";
 export { Event } from "./Event.js";
 export { Survey } from "./Survey.js";
@@ -11,3 +12,4 @@ export { UserConsent } from "./UserConsent.js";
 export { PasswordReset } from "./PasswordReset.js";
 export { ContactMessage } from "./ContactMessage.js";
 export { AccountDeletionAudit } from "./AccountDeletionAudit.js";
+export { InternalNotification } from "./InternalNotification.js";

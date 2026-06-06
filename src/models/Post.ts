@@ -2,20 +2,34 @@ import mongoose, { Schema } from "mongoose";
 
 const postSchema = new Schema(
   {
+    title: { type: String, required: true },
+    summary: { type: String, required: true },
+    content: { type: String, required: true },
+    imageUrl: { type: String },
     category: {
       type: String,
-      enum: ["NOTICIAS", "OBRAS", "SAUDE", "EDUCACAO", "ASSISTENCIA_SOCIAL", "CULTURA", "ESPORTE", "EVENTOS", "AVISOS"],
+      enum: ["aviso", "obra", "saude", "educacao", "evento", "campanha", "prestacao_de_contas", "urgente"],
       required: true
     },
-    title: { type: String, required: true },
-    content: { type: String, required: true },
-    images: [String],
+    priority: {
+      type: String,
+      enum: ["normal", "destaque", "urgente"],
+      default: "normal"
+    },
+    status: {
+      type: String,
+      enum: ["draft", "published", "archived"],
+      default: "draft"
+    },
     likes: [{ type: Schema.Types.ObjectId, ref: "User" }],
     views: { type: Number, default: 0 },
     shares: { type: Number, default: 0 },
-    targetNeighborhoods: [String],
-    publishedAt: Date,
-    isPublished: { type: Boolean, default: false }
+    targetNeighborhood: { type: String },
+    targetCommunity: { type: String },
+    alsoShareOnWhatsapp: { type: Boolean, default: false },
+    whatsappUrl: { type: String, default: "" },
+    customShareText: { type: String, default: "" },
+    publishedAt: Date
   },
   { timestamps: true }
 );

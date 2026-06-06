@@ -5,17 +5,80 @@ import { crudController } from "../controllers/crudController.js";
 import { attendEvent, likePost, resolveDemand, sharePost, viewPost, voteSurvey } from "../controllers/domainController.js";
 import { createAndSendNotification, createNotification, getNotification, listNotifications, notificationStats, previewNotificationTargets, sendNotification, trackClick, trackOpen, updateNotification } from "../controllers/notificationController.js";
 import { createUser, getUser, listUsers, softDeleteUser, updateUser, updateUserStatus, userActivity, usersByNeighborhood, usersOverview } from "../controllers/userController.js";
-import { Demand, Event, Notification, Post, Survey, User } from "../models/index.js";
+import { Demand, Event, Notification, Post, Survey, User, Video } from "../models/index.js";
 import { adminRoles, requireAuth, requireRoles } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { asyncHandler } from "../utils/http.js";
 import { enrichDemandAddress, enrichUserAddress } from "../services/geocodingService.js";
 
+import path from "path";
+import multer from "multer";
+import { uploadDirectFile } from "../services/uploadService.js";
+
 const postCrud = crudController(Post);
+
+const videoCrud = crudController(Video, {
+  mapPayload: async (payload, req) => {
+    if (req.method === "POST") {
+      return { ...payload, createdBy: req.user?.id, updatedBy: req.user?.id };
+    }
+    return { ...payload, updatedBy: req.user?.id };
+  }
+});
+
 const demandCrud = crudController(Demand, { mineField: "citizenId", mapPayload: async (payload) => enrichDemandAddress(payload) });
 const eventCrud = crudController(Event);
 const surveyCrud = crudController(Survey);
 const notificationCrud = crudController(Notification);
+
+// Multer Setup for video upload
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 200 * 1024 * 1024 // 200MB limit
+  },
+  fileFilter: (_req, file, cb) => {
+    const allowedMimeTypes = ["video/mp4", "video/quicktime", "video/webm"];
+    const allowedExtensions = [".mp4", ".mov", ".webm"];
+    const ext = path.extname(file.originalname).toLowerCase();
+    
+    if (!allowedMimeTypes.includes(file.mimetype) || !allowedExtensions.includes(ext)) {
+      return cb(new Error("Apenas vídeos mp4, mov, webm são permitidos."));
+    }
+    cb(null, true);
+  }
+});
+
+const uploadSingleVideo = upload.single("video");
+
+export const uploadVideoHandler = asyncHandler(async (req: any, res) => {
+  uploadSingleVideo(req, res, async (err) => {
+    if (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: "Nenhum arquivo enviado." });
+    }
+    
+    try {
+      const { buffer, originalname, mimetype, size } = req.file;
+      const result = await uploadDirectFile("videos", originalname, buffer, mimetype);
+      
+      res.json({
+        url: result.publicUrl,
+        key: result.key,
+        originalName: originalname,
+        mimeType: mimetype,
+        size
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: "Erro ao fazer upload do vídeo." });
+    }
+  });
+});
+
+export const adminRoutes = Router();
+adminRoutes.post("/videos/upload", requireAuth, requireRoles(...adminRoles), uploadVideoHandler);
 
 export const postRoutes = Router();
 postRoutes.get("/", postCrud.list);
@@ -27,6 +90,14 @@ postRoutes.delete("/:id", requireAuth, requireRoles("SUPER_ADMIN", "PREFEITA"), 
 postRoutes.post("/:id/like", requireAuth, likePost);
 postRoutes.post("/:id/view", viewPost);
 postRoutes.post("/:id/share", sharePost);
+
+export const videoRoutes = Router();
+videoRoutes.get("/", videoCrud.list);
+videoRoutes.get("/:id", videoCrud.get);
+videoRoutes.post("/", requireAuth, requireRoles(...adminRoles), videoCrud.create);
+videoRoutes.patch("/:id", requireAuth, requireRoles(...adminRoles), videoCrud.update);
+videoRoutes.put("/:id", requireAuth, requireRoles(...adminRoles), videoCrud.update);
+videoRoutes.delete("/:id", requireAuth, requireRoles("SUPER_ADMIN", "PREFEITA"), videoCrud.remove);
 
 export const demandRoutes = Router();
 demandRoutes.get("/", requireAuth, demandCrud.list);

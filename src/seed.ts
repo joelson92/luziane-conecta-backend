@@ -56,10 +56,12 @@ await Post.updateOne(
   { title: "Mensagem da Luziane" },
   {
     $set: {
-      category: "AVISOS",
+      category: "aviso",
       title: "Mensagem da Luziane",
+      summary: "Este e o canal oficial para ouvir voce e cuidar melhor da nossa cidade.",
       content: "Este e o canal oficial para ouvir voce e cuidar melhor da nossa cidade.",
-      isPublished: true,
+      priority: "normal",
+      status: "published",
       publishedAt: new Date()
     }
   },

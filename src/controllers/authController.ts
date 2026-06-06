@@ -10,7 +10,7 @@ import { enrichNeighborhoodPayload } from "../services/neighborhoodService.js";
 export const registerSchema = z.object({
   name: z.string().min(2),
   email: z.string().email(),
-  phone: z.string().optional(),
+  phone: z.string().min(8),
   password: z.string().min(8),
   birthDate: z.coerce.date().optional(),
   neighborhoodId: z.string().optional(),
@@ -23,7 +23,20 @@ export const registerSchema = z.object({
   city: z.string().optional(),
   state: z.string().optional(),
   zipCode: z.string().optional(),
-  interests: z.array(z.string()).optional()
+  interests: z.array(z.string()).optional(),
+  gender: z.string().optional(),
+  acceptedTerms: z.literal(true),
+  acceptedPrivacy: z.literal(true),
+  acceptedTermsAt: z.coerce.date().optional(),
+  acceptedPrivacyAt: z.coerce.date().optional(),
+  acceptedTermsVersion: z.string().optional(),
+  acceptedPrivacyVersion: z.string().optional(),
+  location: z.object({
+    type: z.literal("Point"),
+    coordinates: z.array(z.number()).length(2),
+    source: z.enum(["GPS", "MANUAL_PIN"]),
+    confirmed: z.literal(true)
+  })
 });
 
 export const loginSchema = z.object({
@@ -64,18 +77,106 @@ async function consentStatus(userId: string) {
 }
 
 export const register = asyncHandler(async (req, res) => {
-  const exists = await User.exists({ email: req.body.email });
+  const emailLower = String(req.body.email || "").toLowerCase().trim();
+  const exists = await User.exists({ email: emailLower });
   if (exists) throw new AppError(409, "Email already registered");
 
   const passwordHash = await bcrypt.hash(req.body.password, 12);
-  const userPayload = await enrichUserAddress(await enrichNeighborhoodPayload(await enrichAddressFromZipCode({ ...req.body, passwordHash, role: "CIDADAO", appInstalledAt: new Date(), lastLoginAt: new Date() })));
+
+  const {
+    name,
+    phone,
+    birthDate,
+    neighborhood,
+    neighborhoodName,
+    community,
+    street,
+    number,
+    complement,
+    city,
+    state,
+    zipCode,
+    interests,
+    gender,
+    acceptedTerms,
+    acceptedPrivacy,
+    acceptedTermsAt,
+    acceptedPrivacyAt,
+    acceptedTermsVersion,
+    acceptedPrivacyVersion,
+    location
+  } = req.body;
+
+  const rawPayload = {
+    name,
+    email: emailLower,
+    phone,
+    birthDate,
+    neighborhood: neighborhood || neighborhoodName,
+    neighborhoodName: neighborhoodName || neighborhood,
+    community,
+    street,
+    number,
+    complement,
+    city,
+    state,
+    zipCode,
+    interests,
+    gender,
+    passwordHash,
+    role: "CIDADAO",
+    appInstalledAt: new Date(),
+    lastLoginAt: new Date(),
+    isActive: true,
+
+    // Novas coordenadas geográficas integradas
+    latitude: location ? location.coordinates[1] : undefined,
+    longitude: location ? location.coordinates[0] : undefined,
+    locationConfirmed: location ? location.confirmed : false,
+    locationConfirmedAt: location ? (acceptedTermsAt || new Date()) : undefined,
+    locationSource: location ? location.source : undefined,
+    location,
+
+    // Novas propriedades de aceite/consentimento
+    acceptedTerms: true,
+    acceptedPrivacy: true,
+    acceptedTermsAt: acceptedTermsAt || new Date(),
+    acceptedPrivacyAt: acceptedPrivacyAt || new Date(),
+    acceptedTermsVersion: acceptedTermsVersion || "1.0",
+    acceptedPrivacyVersion: acceptedPrivacyVersion || "1.0"
+  };
+
+  const userPayload = await enrichUserAddress(
+    await enrichNeighborhoodPayload(
+      await enrichAddressFromZipCode(rawPayload)
+    )
+  );
+
   const user = await User.create(userPayload);
+
+  await UserConsent.create({
+    userId: user.id,
+    acceptedTerms: true,
+    acceptedPrivacy: true,
+    acceptedAt: acceptedTermsAt || new Date(),
+    appVersion: acceptedTermsVersion || "1.0",
+    deviceInfo: "mobile-app"
+  });
+
   const tokenPayload = { id: user.id, email: user.get("email"), role: user.get("role") };
   const accessToken = signAccessToken(tokenPayload);
   const refreshToken = signRefreshToken(tokenPayload);
   user.set("refreshTokenHash", await bcrypt.hash(refreshToken, 10));
   await user.save();
-  res.status(201).json({ user: publicUser(user), token: accessToken, accessToken, refreshToken, ...(await consentStatus(user.id)) });
+
+  res.status(201).json({
+    user: publicUser(user),
+    token: accessToken,
+    accessToken,
+    refreshToken,
+    hasAcceptedLegalTerms: true,
+    consentAcceptedAt: new Date()
+  });
 });
 
 export const login = asyncHandler(async (req, res) => {

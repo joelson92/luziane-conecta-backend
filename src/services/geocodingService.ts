@@ -44,7 +44,6 @@ export async function geocodeAddress(address: AddressInput): Promise<GeocodeResu
 
   for (let i = 0; i < attempts.length; i++) {
     const fullAddress = attempts[i];
-    console.log("[GEOCODING_FULL_ADDRESS]", fullAddress);
     const result = await geocodeAddressText(fullAddress);
     if (result) {
       const precision = i === 0 ? "EXACT" : "APPROXIMATE";
@@ -61,7 +60,6 @@ export async function geocodeAddress(address: AddressInput): Promise<GeocodeResu
 export async function fetchAddressByZipCode(zipCode: string) {
   const cleanZipCode = normalizeZipCode(zipCode);
   if (!cleanZipCode) return null;
-  console.log("[CEP_INPUT]", cleanZipCode);
 
   const response = await fetch(`https://viacep.com.br/ws/${cleanZipCode}/json/`);
   if (!response.ok) return null;
@@ -73,7 +71,6 @@ export async function fetchAddressByZipCode(zipCode: string) {
     localidade?: string;
     uf?: string;
   };
-  console.log("[VIACEP_RESPONSE]", data);
   if (data.erro) return null;
 
   return {
@@ -155,7 +152,6 @@ export async function enrichUserAddress<T extends Record<string, any>>(payload: 
     typeof payload.longitude === "number" &&
     currentPriority >= 2
   ) {
-    console.log("[GEOCODING_SKIPPED] User already has confirmed location with higher or equal priority:", currentSource);
     return payload;
   }
 
@@ -165,7 +161,6 @@ export async function enrichUserAddress<T extends Record<string, any>>(payload: 
 
   try {
     const result = await geocodeAddress(address);
-    console.log("[GEOCODING_RESULT]", result);
     if (!result) return withFailedGeocoding(next);
     return {
       ...next,
@@ -179,7 +174,6 @@ export async function enrichUserAddress<T extends Record<string, any>>(payload: 
       geocodingPrecision: result.precision || "APPROXIMATE"
     };
   } catch {
-    console.log("[GEOCODING_RESULT]", null);
     return withFailedGeocoding(next);
   }
 }

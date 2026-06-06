@@ -1,6 +1,7 @@
 import { Demand, Event, Post, Survey } from "../models/index.js";
 import { asyncHandler, AppError } from "../utils/http.js";
 import { registerActivity } from "../services/gamificationService.js";
+import { handleModelUpdate } from "../services/internalNotificationService.js";
 
 export const likePost = asyncHandler(async (req: any, res) => {
   const post = await Post.findByIdAndUpdate(req.params.id, { $addToSet: { likes: req.user.id } }, { new: true });
@@ -45,5 +46,7 @@ export const resolveDemand = asyncHandler(async (req, res) => {
   const demand = await Demand.findByIdAndUpdate(req.params.id, { status: "RESOLVIDO", resolvedAt: new Date() }, { new: true });
   if (!demand) throw new AppError(404, "Demand not found");
   await registerActivity(String(demand.get("citizenId")), "DEMAND_RESOLVED", req.params.id);
+  // Trigger internal notification for status update
+  handleModelUpdate("Demand", demand).catch(err => console.error("Notification trigger error:", err));
   res.json({ data: demand });
 });

@@ -1,4 +1,4 @@
-import { CitizenActivity, Demand, Event, Notification, Post, Survey, SystemSettings, User } from "../models/index.js";
+import { CitizenActivity, Demand, Event, Notification, Post, Survey, SystemSettings, User, Video } from "../models/index.js";
 import { citizenRoleFilter, validUserCoordinateQuery } from "../services/userGeoService.js";
 import { asyncHandler } from "../utils/http.js";
 
@@ -40,7 +40,11 @@ export const dashboard = asyncHandler(async (_req, res) => {
     mapEvents,
     heatmapUsers,
     heatmapDemands,
-    topics
+    topics,
+    publishedPostsCount,
+    publishedVideosCount,
+    lastPost,
+    lastVideo
   ] = await Promise.all([
     User.countDocuments(),
     User.countDocuments({
@@ -72,7 +76,7 @@ export const dashboard = asyncHandler(async (_req, res) => {
     Demand.aggregate([{ $match: { type: "RECLAMACAO" } }, { $group: { _id: neighborhoodNameExpression(), total: { $sum: 1 } } }, { $sort: { total: -1 } }]),
     neighborhoodActivityRanking(),
     Demand.find().sort({ createdAt: -1 }).limit(6).select("createdAt neighborhoodId neighborhoodName neighborhood title status assignedTo type"),
-    Post.find({ isPublished: true }).sort({ publishedAt: -1, createdAt: -1 }).limit(5).select("title publishedAt createdAt"),
+    Post.find({ status: "published" }).sort({ publishedAt: -1, createdAt: -1 }).limit(5).select("title publishedAt createdAt"),
     Event.find({ isPublished: true }).sort({ createdAt: -1 }).limit(5).select("title createdAt"),
     Survey.find({ isActive: true }).sort({ createdAt: -1 }).limit(5).select("title createdAt"),
     Notification.find().sort({ createdAt: -1 }).limit(5).select("title createdAt"),
@@ -82,7 +86,11 @@ export const dashboard = asyncHandler(async (_req, res) => {
     Event.find({ "location.lat": { $type: "number" }, "location.lng": { $type: "number" }, isPublished: true }).select("title neighborhoodId neighborhoodName neighborhood location startDate").limit(1000),
     User.find(validUserCoordinateQuery()).select("latitude longitude"),
     Demand.find({ "location.lat": { $type: "number" }, "location.lng": { $type: "number" } }).select("location"),
-    calculateMostMentionedTopics()
+    calculateMostMentionedTopics(),
+    Post.countDocuments({ status: "published" }),
+    Video.countDocuments({ status: "published" }),
+    Post.findOne({ status: "published" }).sort({ publishedAt: -1, createdAt: -1 }).select("title publishedAt"),
+    Video.findOne({ status: "published" }).sort({ publishedAt: -1, createdAt: -1 }).select("title publishedAt")
   ]);
 
   const demandEvolutionByMonth = normalizeDemandEvolution(demandEvolution);
@@ -99,7 +107,11 @@ export const dashboard = asyncHandler(async (_req, res) => {
       engagementRate: citizenUsers ? Math.round((activeUsers / citizenUsers) * 100) : 0,
       notificationsSent: notifications[0]?.sent ?? 0,
       geolocatedUsers,
-      geolocatedDemands
+      geolocatedDemands,
+      publishedPosts: publishedPostsCount,
+      publishedVideos: publishedVideosCount,
+      lastPost: lastPost ? { title: lastPost.title, publishedAt: lastPost.publishedAt } : null,
+      lastVideo: lastVideo ? { title: lastVideo.title, publishedAt: lastVideo.publishedAt } : null
     },
     territorial: {
       topParticipationNeighborhood: topParticipationNeighborhood[0] ?? null,
@@ -129,7 +141,6 @@ export const dashboard = asyncHandler(async (_req, res) => {
     }
   };
 
-  console.log("[DASHBOARD_QUERY_RESULT]", result);
   res.json(result);
 });
 

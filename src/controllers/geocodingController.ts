@@ -66,8 +66,6 @@ export const searchAddress = asyncHandler(async (req, res) => {
   queryParts.push("Brasil");
 
   const fullQuery = queryParts.filter(Boolean).join(", ");
-  console.log("[SEARCH_ADDRESS_QUERY]", fullQuery);
-
   const url = new URL("https://nominatim.openstreetmap.org/search");
   url.searchParams.set("format", "jsonv2");
   url.searchParams.set("limit", "10");
@@ -112,7 +110,7 @@ export const searchAddress = asyncHandler(async (req, res) => {
 
     res.json(suggestions);
   } catch (error) {
-    console.error("[SEARCH_ADDRESS_ERROR]", error);
+    console.error("[SEARCH_ADDRESS_ERROR]", error instanceof Error ? error.message : error);
     res.json([]);
   }
 });
