@@ -4,7 +4,7 @@ import { z } from "zod";
 import { crudController } from "../controllers/crudController.js";
 import { attendEvent, likePost, resolveDemand, sharePost, viewPost, voteSurvey } from "../controllers/domainController.js";
 import { createAndSendNotification, createNotification, getNotification, listNotifications, notificationStats, previewNotificationTargets, sendNotification, trackClick, trackOpen, updateNotification } from "../controllers/notificationController.js";
-import { createUser, getUser, listUsers, softDeleteUser, updateUser, updateUserStatus, userActivity, usersByNeighborhood, usersOverview } from "../controllers/userController.js";
+import { createUser, getUser, listUsers, softDeleteUser, updateUser, updateUserStatus, userActivity, usersByNeighborhood, usersOverview, deleteUserPermanent, resetUserPassword } from "../controllers/userController.js";
 import { Demand, Event, Notification, Post, Survey, User, Video } from "../models/index.js";
 import { adminRoles, requireAuth, requireRoles } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
@@ -80,7 +80,21 @@ export const uploadVideoHandler = asyncHandler(async (req: any, res) => {
 export const adminRoutes = Router();
 adminRoutes.post("/videos/upload", requireAuth, requireRoles(...adminRoles), uploadVideoHandler);
 
+import { matchesAudience } from "../utils/audience.js";
+
+export const listMyPosts = asyncHandler(async (req: any, res) => {
+  const fullUser = await User.findById(req.user.id);
+  if (!fullUser) {
+    res.status(404).json({ message: "User not found" });
+    return;
+  }
+  const posts = await Post.find({ status: "published" }).sort({ createdAt: -1 }).limit(200);
+  const filtered = posts.filter(post => matchesAudience(fullUser, post));
+  res.json({ data: filtered });
+});
+
 export const postRoutes = Router();
+postRoutes.get("/my", requireAuth, listMyPosts);
 postRoutes.get("/", postCrud.list);
 postRoutes.get("/:id", postCrud.get);
 postRoutes.post("/", requireAuth, requireRoles(...adminRoles), postCrud.create);
@@ -126,7 +140,10 @@ surveyRoutes.put("/:id", requireAuth, requireRoles(...adminRoles), surveyCrud.up
 surveyRoutes.delete("/:id", requireAuth, requireRoles("SUPER_ADMIN", "PREFEITA"), surveyCrud.remove);
 surveyRoutes.post("/:id/vote", requireAuth, validate(z.object({ optionId: z.string() })), voteSurvey);
 
+import { listInternalNotifications } from "../controllers/internalNotificationController.js";
+
 export const notificationRoutes = Router();
+notificationRoutes.get("/my", requireAuth, listInternalNotifications);
 notificationRoutes.get("/", requireAuth, requireRoles(...adminRoles), listNotifications);
 notificationRoutes.get("/stats", requireAuth, requireRoles(...adminRoles), notificationStats);
 notificationRoutes.post("/preview-targets", requireAuth, requireRoles(...adminRoles), previewNotificationTargets);
@@ -151,6 +168,8 @@ userRoutes.get("/:id", getUser);
 userRoutes.put("/:id", requireRoles("SUPER_ADMIN", "PREFEITA", "ASSESSOR"), updateUser);
 userRoutes.patch("/:id/status", requireRoles("SUPER_ADMIN", "PREFEITA", "ASSESSOR"), updateUserStatus);
 userRoutes.delete("/:id", requireRoles("SUPER_ADMIN", "PREFEITA", "ASSESSOR"), softDeleteUser);
+userRoutes.delete("/:id/permanent", requireRoles("SUPER_ADMIN", "PREFEITA"), deleteUserPermanent);
+userRoutes.patch("/:id/reset-password", requireRoles("SUPER_ADMIN", "PREFEITA", "ASSESSOR"), resetUserPassword);
 
 
 // ─── Neighborhood Routes — DESCONTINUADO ─────────────────────────────────────

@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
-import { CitizenActivity, Demand, Event, Survey, User, Neighborhood } from "../models/index.js";
+import { CitizenActivity, Demand, Event, Survey, User, Neighborhood, AccountDeletionAudit } from "../models/index.js";
 import { enrichAddressFromZipCode, enrichUserAddress } from "../services/geocodingService.js";
 import { buildNeighborhoodQuery, enrichNeighborhoodPayload, stripEmptyNeighborhoodId } from "../services/neighborhoodService.js";
 import { citizenRoleFilter, getCitizenGeoStats, normalizeUserCoordinates, validUserCoordinateQuery } from "../services/userGeoService.js";
@@ -32,8 +32,28 @@ export const getUser = asyncHandler(async (req, res) => {
   res.json({ data: user });
 });
 
+export function validatePasswordStrength(password: string) {
+  if (!password || password.length < 8) {
+    throw new AppError(400, "A senha deve ter no mínimo 8 caracteres.");
+  }
+  if (!/[A-Z]/.test(password)) {
+    throw new AppError(400, "A senha deve conter pelo menos uma letra maiúscula.");
+  }
+  if (!/[a-z]/.test(password)) {
+    throw new AppError(400, "A senha deve conter pelo menos uma letra minúscula.");
+  }
+  if (!/[0-9]/.test(password)) {
+    throw new AppError(400, "A senha deve conter pelo menos um número.");
+  }
+  if (!/[!@#$%^&*(),.?\":{}|<>]/.test(password)) {
+    throw new AppError(400, "A senha deve conter pelo menos um caractere especial.");
+  }
+}
+
 export const createUser = asyncHandler(async (req, res) => {
-  const passwordHash = await bcrypt.hash(req.body.password || "User@123456", 12);
+  const password = req.body.password || "User@123456";
+  validatePasswordStrength(password);
+  const passwordHash = await bcrypt.hash(password, 12);
   const payload = normalizeUserCoordinates(await prepareUserPayload(sanitizeUserPayload({ ...req.body, role: normalizeRole(req.body.role || "CIDADAO"), passwordHash }), true));
   const user = await User.create(payload);
   const safe = await User.findById(user._id).select(safeSelect);
@@ -99,6 +119,84 @@ export const updateUserStatus = asyncHandler(async (req, res) => {
   const user = await User.findByIdAndUpdate(req.params.id, { isActive: Boolean(req.body.isActive) }, { new: true }).select(safeSelect);
   if (!user) throw new AppError(404, "User not found");
   res.json({ data: user });
+});
+
+export const deleteUserPermanent = asyncHandler(async (req: any, res) => {
+  const targetId = req.params.id;
+  const currentUserId = req.user.id;
+  const currentUserRole = req.user.role;
+
+  const targetUser = await User.findById(targetId);
+  if (!targetUser) {
+    throw new AppError(404, "Usuário não encontrado.");
+  }
+
+  // 1. admin não pode excluir a si mesmo
+  if (String(targetId) === String(currentUserId)) {
+    throw new AppError(400, "Você não pode excluir a si mesmo.");
+  }
+
+  // 2. superadmin não pode ser excluído por admin comum (PREFEITA ou ASSESSOR)
+  if (targetUser.role === "SUPER_ADMIN" && currentUserRole !== "SUPER_ADMIN") {
+    throw new AppError(403, "Apenas um SUPER_ADMIN pode excluir outro SUPER_ADMIN.");
+  }
+
+  // 3. somente admin/superadmin autorizado pode excluir definitivamente
+  if (currentUserRole === "ASSESSOR") {
+    throw new AppError(403, "Assessores não têm permissão para excluir usuários permanentemente.");
+  }
+
+  // Registrar log da ação de auditoria
+  try {
+    await AccountDeletionAudit.create({
+      userId: targetId,
+      requestedAt: new Date(),
+      reason: `Exclusão permanente realizada por ${req.user.email} (${currentUserRole})`,
+      status: "PERMANENT_DELETED"
+    });
+  } catch (err) {
+    console.error("Erro ao registrar auditoria de exclusão:", err);
+  }
+
+  console.log(`[AUDIT] Usuário ${targetUser.email} foi excluído permanentemente por ${req.user.email}`);
+
+  // Remover definitivamente do banco
+  await User.findByIdAndDelete(targetId);
+
+  res.json({ message: "Usuário excluído permanentemente com sucesso." });
+});
+
+export const resetUserPassword = asyncHandler(async (req: any, res) => {
+  const targetId = req.params.id;
+  const currentUserId = req.user.id;
+  const currentUserRole = req.user.role;
+
+  const targetUser = await User.findById(targetId);
+  if (!targetUser) {
+    throw new AppError(404, "Usuário não encontrado.");
+  }
+
+  // 1. admin não pode redefinir senha de superadmin, salvo se também for superadmin
+  if (targetUser.role === "SUPER_ADMIN" && currentUserRole !== "SUPER_ADMIN") {
+    throw new AppError(403, "Apenas um SUPER_ADMIN pode alterar a senha de outro SUPER_ADMIN.");
+  }
+
+  // Validar senha forte
+  const password = req.body.password;
+  validatePasswordStrength(password);
+
+  // Hash password
+  const passwordHash = await bcrypt.hash(password, 12);
+  targetUser.passwordHash = passwordHash;
+  if (req.body.forcePasswordChange !== undefined) {
+    targetUser.set("forcePasswordChange", Boolean(req.body.forcePasswordChange));
+  }
+
+  await targetUser.save();
+
+  console.log(`[AUDIT] Senha do usuário ${targetUser.email} foi redefinida por ${req.user.email}`);
+
+  res.json({ message: "Senha redefinida com sucesso." });
 });
 
 export const usersOverview = asyncHandler(async (_req, res) => {
@@ -296,3 +394,45 @@ async function usersByNeighborhoodAggregation() {
     { $sort: { total: -1 } }
   ]);
 }
+
+// ─── Push Token Registration ──────────────────────────────────────────────────
+
+/**
+ * PATCH /api/auth/me/push-token
+ * Recebe o token push do app mobile e salva no usuário autenticado.
+ */
+export const updateMyPushToken = asyncHandler(async (req: any, res) => {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ message: "Não autenticado." });
+    return;
+  }
+
+  const token: string | undefined = req.body?.token;
+  const platform: "android" | "ios" | "web" | undefined = req.body?.platform;
+
+  if (!token || typeof token !== "string" || !token.trim()) {
+    res.status(400).json({ message: "Token push inválido ou ausente." });
+    return;
+  }
+
+  const cleanToken = token.trim();
+  const user = await User.findByIdAndUpdate(
+    userId,
+    {
+      fcmToken: cleanToken,
+      pushPlatform: platform ?? "android",
+      pushTokenUpdatedAt: new Date()
+    },
+    { new: true }
+  ).select("-passwordHash -refreshTokenHash");
+
+  if (!user) {
+    res.status(404).json({ message: "Usuário não encontrado." });
+    return;
+  }
+
+  console.log(`[PUSH_TOKEN] Token atualizado para usuário ${user.email} (${platform}): ${cleanToken.slice(0, 40)}...`);
+  res.json({ ok: true, message: "Token push atualizado com sucesso." });
+});
+

@@ -42,7 +42,7 @@ export function crudController(model: Model<any>, options: { mineField?: string;
       } else if (!isAdmin) {
         // Non-admin users can only view published items (for models that have a status field)
         const hasStatusField = model.schema.paths.status !== undefined;
-        if (hasStatusField) {
+        if (hasStatusField && model.modelName !== "Demand") {
           query.status = "published";
         }
       }

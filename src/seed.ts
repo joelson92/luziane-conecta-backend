@@ -58,8 +58,8 @@ await Post.updateOne(
     $set: {
       category: "aviso",
       title: "Mensagem da Luziane",
-      summary: "Este e o canal oficial para ouvir voce e cuidar melhor da nossa cidade.",
-      content: "Este e o canal oficial para ouvir voce e cuidar melhor da nossa cidade.",
+      summary: "Espaco de comunicacao e participacao da comunidade.",
+      content: "Espaco de comunicacao e participacao da comunidade.",
       priority: "normal",
       status: "published",
       publishedAt: new Date()
@@ -91,7 +91,7 @@ await Survey.updateOne(
   {
     $set: {
       title: "Qual deve ser a proxima obra prioritaria?",
-      description: "Ajude a definir a prioridade da gestao.",
+      description: "Ajude a definir os temas mais importantes para a nossa comunidade.",
       options: [{ label: "Pavimentacao", votes: [] }, { label: "Saude", votes: [] }, { label: "Educacao", votes: [] }],
       isActive: true
     }

@@ -1,6 +1,15 @@
 import { Types } from "mongoose";
 import { User } from "../models/index.js";
 import type { Role } from "../types.js";
+import {
+  normalizeTarget,
+  normalizeRole,
+  cleanTargetArray,
+  matchesAudience,
+  buildAudienceUserQuery
+} from "../utils/audience.js";
+
+export { normalizeTarget, normalizeRole, matchesAudience };
 
 export type TargetType = "ALL" | "NEIGHBORHOOD" | "COMMUNITY" | "AGE_RANGE" | "INTERESTS" | "ROLE" | "PROFILE" | "SPECIFIC_USERS";
 
@@ -20,6 +29,7 @@ type TargetUser = {
   role?: Role;
   birthDate?: Date;
   neighborhood?: string;
+  neighborhoodName?: string;
   community?: string;
   profile?: string;
   interests?: string[];
@@ -27,28 +37,94 @@ type TargetUser = {
   fcmTokens?: string[];
 };
 
-export async function resolveNotificationTargets(targetType: TargetType, filters: TargetFilters = {}) {
-  const normalizedType = normalizeTargetType(targetType);
-  const normalizedFilters = normalizeFilters(filters);
-  const query: Record<string, unknown> = { isActive: true };
+export async function resolveNotificationTargets(targetOrType: any, filters: TargetFilters = {}) {
+  let targetObj: any;
 
-  if (normalizedType === "NEIGHBORHOOD") query.neighborhood = { $in: normalizedFilters.neighborhoods };
-  if (normalizedType === "COMMUNITY") query.community = { $in: normalizedFilters.communities };
-  if (normalizedType === "INTERESTS") query.interests = { $in: normalizedFilters.interests };
-  if (normalizedType === "ROLE") query.role = { $in: normalizedFilters.roles };
-  if (normalizedType === "PROFILE") query.profile = { $in: normalizedFilters.profiles };
-  if (normalizedType === "SPECIFIC_USERS") query._id = { $in: normalizedFilters.userIds };
-
-  let users = await User.find(query)
-    .select("_id role birthDate neighborhood community profile interests fcmToken fcmTokens")
-    .lean<TargetUser[]>();
-
-  if (normalizedType === "AGE_RANGE") {
-    users = users.filter((user) => isInsideAgeRange(user.birthDate, normalizedFilters.ageMin, normalizedFilters.ageMax));
+  if (targetOrType && typeof targetOrType === "object") {
+    targetObj = targetOrType;
+  } else {
+    const targetType = normalizeTargetType(targetOrType);
+    const targetFilters = normalizeFilters(filters);
+    targetObj = {
+      audienceType: targetType === "ALL" ? "all" : "segmented",
+      targetNeighborhoods: targetFilters.neighborhoods || [],
+      targetCommunities: targetFilters.communities || [],
+      targetRoles: targetFilters.roles || [],
+      targetProfiles: targetFilters.profiles || [],
+      targetInterests: targetFilters.interests || [],
+      targetUserIds: targetFilters.userIds || [],
+      targetAgeRange: {
+        min: targetFilters.ageMin,
+        max: targetFilters.ageMax
+      }
+    };
   }
 
-  const recipients = users.filter((user) => getUserTokens(user).length > 0);
+  // Clean filters
+  targetObj.targetNeighborhoods = cleanTargetArray(targetObj.targetNeighborhoods);
+  targetObj.targetCommunities = cleanTargetArray(targetObj.targetCommunities);
+  targetObj.targetRoles = cleanTargetArray(targetObj.targetRoles);
+  targetObj.targetProfiles = cleanTargetArray(targetObj.targetProfiles);
+  targetObj.targetInterests = cleanTargetArray(targetObj.targetInterests);
+
+  const query = buildAudienceUserQuery(targetObj);
+  query.isActive = true;
+
+  // Print mandatory [NOTIFICATION_AUDIT] logs
+  console.log(`[NOTIFICATION_AUDIT] payload recebido:`, JSON.stringify(targetObj));
+  
+  const normalizedFiltersForLog = {
+    neighborhoods: targetObj.targetNeighborhoods,
+    communities: targetObj.targetCommunities,
+    roles: targetObj.targetRoles.map(normalizeRole),
+    profiles: targetObj.targetProfiles,
+    interests: targetObj.targetInterests,
+    userIds: targetObj.targetUserIds || [],
+    ageMin: targetObj.targetAgeRange?.min,
+    ageMax: targetObj.targetAgeRange?.max
+  };
+  console.log(`[NOTIFICATION_AUDIT] audienceType recebido:`, targetObj.audienceType);
+  console.log(`[NOTIFICATION_AUDIT] filtros recebidos:`, JSON.stringify(normalizedFiltersForLog));
+  console.log(`[NOTIFICATION_AUDIT] query final:`, JSON.stringify(query));
+
+  // Count total active users (regardless of audience filter)
+  const totalActiveUsers = await User.countDocuments({ isActive: true });
+  console.log(`[NOTIFICATION_AUDIT] total users ativos:`, totalActiveUsers);
+
+  // Count users with any push token
+  const totalUsersWithToken = await User.countDocuments({
+    isActive: true,
+    $or: [
+      { fcmToken: { $exists: true, $nin: [null, ""] } },
+      { fcmTokens: { $exists: true, $not: { $size: 0 } } }
+    ]
+  });
+  console.log(`[NOTIFICATION_AUDIT] total users com token:`, totalUsersWithToken);
+
+  // Limit to active users with tokens
+  const tokenQuery = {
+    ...query,
+    $or: [
+      { fcmToken: { $exists: true, $nin: [null, ""] } },
+      { fcmTokens: { $exists: true, $not: { $size: 0 } } }
+    ]
+  };
+
+  const users = await User.find(tokenQuery)
+    .select("_id role birthDate neighborhood neighborhoodName community profile interests fcmToken fcmTokens")
+    .lean<TargetUser[]>();
+
+  const recipients = users.filter((user) => matchesAudience(user, targetObj));
   const tokens = recipients.flatMap(getUserTokens);
+
+  const eligibleNeighborhoods = Array.from(new Set(recipients.map(u => u.neighborhood || u.neighborhoodName).filter(Boolean)));
+  const eligibleRoles = Array.from(new Set(recipients.map(u => u.role).filter(Boolean)));
+
+  console.log(`[NOTIFICATION_AUDIT] recipients encontrados:`, recipients.length);
+  console.log(`[NOTIFICATION_AUDIT] campos de token encontrados:`, recipients.map(u => u.fcmToken ? "fcmToken" : (u.fcmTokens?.length ? "fcmTokens" : "none")).slice(0, 10));
+  console.log(`[NOTIFICATION_AUDIT] bairros elegíveis:`, eligibleNeighborhoods);
+  console.log(`[NOTIFICATION_AUDIT] roles elegíveis:`, eligibleRoles);
+  console.log(`[NOTIFICATION_AUDIT] tokens finais (contagem):`, tokens.length);
 
   return {
     users: recipients,
@@ -100,22 +176,6 @@ function getUserTokens(user: TargetUser) {
   return Array.from(new Set([user.fcmToken, ...(user.fcmTokens ?? [])].filter((token): token is string => Boolean(token?.trim()))));
 }
 
-function isInsideAgeRange(birthDate: Date | undefined, ageMin?: number, ageMax?: number) {
-  if (!birthDate) return false;
-  const age = calculateAge(birthDate);
-  if (typeof ageMin === "number" && age < ageMin) return false;
-  if (typeof ageMax === "number" && age > ageMax) return false;
-  return true;
-}
-
-function calculateAge(birthDate: Date) {
-  const now = new Date();
-  let age = now.getFullYear() - new Date(birthDate).getFullYear();
-  const monthDelta = now.getMonth() - new Date(birthDate).getMonth();
-  if (monthDelta < 0 || (monthDelta === 0 && now.getDate() < new Date(birthDate).getDate())) age -= 1;
-  return age;
-}
-
 function groupBy(users: TargetUser[], field: keyof TargetUser) {
   const grouped = new Map<string, number>();
   for (const user of users) {
@@ -137,19 +197,4 @@ function optionalNumber(value: unknown) {
   if (value === undefined || value === null || value === "") return undefined;
   const number = Number(value);
   return Number.isFinite(number) ? number : undefined;
-}
-
-function normalizeRole(role: string): Role {
-  const map: Record<string, Role> = {
-    superadmin: "SUPER_ADMIN",
-    super_admin: "SUPER_ADMIN",
-    mayor: "PREFEITA",
-    lideranca: "PREFEITA",
-    assessor: "ASSESSOR",
-    advisor: "ASSESSOR",
-    cidadao: "CIDADAO",
-    cidadão: "CIDADAO",
-    citizen: "CIDADAO"
-  };
-  return map[role.toLowerCase()] ?? (role as Role);
 }

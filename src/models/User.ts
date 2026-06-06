@@ -55,12 +55,15 @@ const userSchema = new Schema(
     interests: [String],
     fcmToken: String,
     fcmTokens: [String],
+    pushPlatform: { type: String, enum: ["android", "ios", "web"] },
+    pushTokenUpdatedAt: Date,
     points: { type: Number, default: 0 },
     level: { type: String, enum: ["BRONZE", "PRATA", "OURO", "DIAMANTE"], default: "BRONZE" },
     isActive: { type: Boolean, default: true },
     lastLoginAt: Date,
     appInstalledAt: Date,
-    refreshTokenHash: String
+    refreshTokenHash: String,
+    forcePasswordChange: { type: Boolean, default: false }
   },
   { timestamps: true }
 );

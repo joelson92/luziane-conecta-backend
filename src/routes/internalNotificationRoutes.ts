@@ -6,6 +6,7 @@ export const internalNotificationRoutes = Router();
 
 internalNotificationRoutes.use(requireAuth);
 
+internalNotificationRoutes.get("/my", listInternalNotifications);
 internalNotificationRoutes.get("/", listInternalNotifications);
 internalNotificationRoutes.get("/unread-count", getUnreadCount);
 internalNotificationRoutes.post("/read-all", markAllAsRead);

@@ -7,7 +7,7 @@ const accountDeletionAuditSchema = new Schema(
     reason: String,
     ipAddress: String,
     deviceInfo: String,
-    status: { type: String, enum: ["SOFT_DELETED"], default: "SOFT_DELETED" }
+    status: { type: String, enum: ["SOFT_DELETED", "PERMANENT_DELETED"], default: "SOFT_DELETED" }
   },
   { timestamps: true }
 );
