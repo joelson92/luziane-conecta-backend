@@ -53,8 +53,7 @@ const userSchema = new Schema(
     profile: { type: String, trim: true },
     gender: String,
     interests: [String],
-    fcmToken: String,
-    fcmTokens: [String],
+    expoPushToken: String,
     pushPlatform: { type: String, enum: ["android", "ios", "web"] },
     pushTokenUpdatedAt: Date,
     points: { type: Number, default: 0 },
@@ -95,7 +94,7 @@ userSchema.index({ role: 1 });
 userSchema.index({ profile: 1 });
 userSchema.index({ interests: 1 });
 userSchema.index({ isActive: 1 });
-userSchema.index({ isActive: 1, fcmToken: 1 });
+userSchema.index({ isActive: 1, expoPushToken: 1 });
 userSchema.index({ isActive: 1, role: 1 });
 userSchema.index({ isActive: 1, neighborhood: 1 });
 userSchema.index({ isActive: 1, community: 1 });

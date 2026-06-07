@@ -18,7 +18,7 @@ async function run() {
         neighborhood: "Centro",
         neighborhoodName: "Centro",
         role: "CIDADAO",
-        fcmToken: "ExponentPushToken[FAKE_TOKEN_CENTRO_001]"
+        expoPushToken: "ExponentPushToken[FAKE_TOKEN_CENTRO_001]"
       },
       {
         email: "notify_bengolandia@luziane.com",
@@ -26,7 +26,7 @@ async function run() {
         neighborhood: "Bengolândia",
         neighborhoodName: "Bengolândia",
         role: "CIDADAO",
-        fcmToken: "ExponentPushToken[FAKE_TOKEN_BENGO_001]"
+        expoPushToken: "ExponentPushToken[FAKE_TOKEN_BENGO_001]"
       },
       {
         email: "notify_duque@luziane.com",
@@ -34,7 +34,7 @@ async function run() {
         neighborhood: "Duque de Caxias",
         neighborhoodName: "Duque de Caxias",
         role: "CIDADAO",
-        fcmToken: "ExponentPushToken[FAKE_TOKEN_DUQUE_001]"
+        expoPushToken: "ExponentPushToken[FAKE_TOKEN_DUQUE_001]"
       }
     ];
 
@@ -48,7 +48,7 @@ async function run() {
         user.neighborhood = u.neighborhood;
         user.neighborhoodName = u.neighborhoodName;
         user.role = u.role as any;
-        user.fcmToken = u.fcmToken;
+        user.set("expoPushToken", u.expoPushToken);
         user.isActive = true;
         await user.save();
         console.log(`✅ Atualizado: ${u.email}`);

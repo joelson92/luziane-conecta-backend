@@ -24,14 +24,14 @@ async function run() {
         neighborhood: "Centro",
         neighborhoodName: "Centro",
         isActive: true,
-        fcmToken: "token_a"
+        expoPushToken: "ExponentPushToken[TEST_TOKEN_A]"
       });
     } else {
       userA.neighborhood = "Centro";
       userA.neighborhoodName = "Centro";
       userA.role = "CIDADAO";
       userA.isActive = true;
-      userA.fcmToken = "token_a";
+      userA.set("expoPushToken", "ExponentPushToken[TEST_TOKEN_A]");
       await userA.save();
     }
 
@@ -46,14 +46,14 @@ async function run() {
         neighborhood: "Maguari",
         neighborhoodName: "Maguari",
         isActive: true,
-        fcmToken: "token_b"
+        expoPushToken: "ExponentPushToken[TEST_TOKEN_B]"
       });
     } else {
       userB.neighborhood = "Maguari";
       userB.neighborhoodName = "Maguari";
       userB.role = "CIDADAO";
       userB.isActive = true;
-      userB.fcmToken = "token_b";
+      userB.set("expoPushToken", "ExponentPushToken[TEST_TOKEN_B]");
       await userB.save();
     }
 
@@ -68,14 +68,14 @@ async function run() {
         neighborhood: "Centro",
         neighborhoodName: "Centro",
         isActive: true,
-        fcmToken: "token_c"
+        expoPushToken: "ExponentPushToken[TEST_TOKEN_C]"
       });
     } else {
       userC.neighborhood = "Centro";
       userC.neighborhoodName = "Centro";
       userC.role = "PREFEITA";
       userC.isActive = true;
-      userC.fcmToken = "token_c";
+      userC.set("expoPushToken", "ExponentPushToken[TEST_TOKEN_C]");
       await userC.save();
     }
 

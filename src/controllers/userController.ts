@@ -399,6 +399,7 @@ async function usersByNeighborhoodAggregation() {
 
 /**
  * PATCH /api/auth/me/push-token
+ * PATCH /api/users/me/push-token
  * Recebe o token push do app mobile e salva no usuário autenticado.
  */
 export const updateMyPushToken = asyncHandler(async (req: any, res) => {
@@ -420,9 +421,18 @@ export const updateMyPushToken = asyncHandler(async (req: any, res) => {
   const user = await User.findByIdAndUpdate(
     userId,
     {
-      fcmToken: cleanToken,
-      pushPlatform: platform ?? "android",
-      pushTokenUpdatedAt: new Date()
+      $set: {
+        expoPushToken: cleanToken,
+        pushPlatform: platform ?? "android",
+        pushTokenUpdatedAt: new Date()
+      },
+      $unset: {
+        fcmToken: 1,
+        fcmTokens: 1,
+        pushToken: 1,
+        deviceToken: 1,
+        notificationToken: 1
+      }
     },
     { new: true }
   ).select("-passwordHash -refreshTokenHash");
@@ -432,7 +442,6 @@ export const updateMyPushToken = asyncHandler(async (req: any, res) => {
     return;
   }
 
-  console.log(`[PUSH_TOKEN] Token atualizado para usuário ${user.email} (${platform}): ${cleanToken.slice(0, 40)}...`);
-  res.json({ ok: true, message: "Token push atualizado com sucesso." });
+  console.log(`[PUSH_TOKEN] expoPushToken atualizado para usuario ${user.email} (${platform}): ${cleanToken.slice(0, 40)}...`);
+  res.json({ success: true, ok: true, expoPushToken: user.get("expoPushToken"), message: "Token push atualizado com sucesso." });
 });
-

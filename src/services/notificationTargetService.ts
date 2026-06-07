@@ -33,8 +33,7 @@ type TargetUser = {
   community?: string;
   profile?: string;
   interests?: string[];
-  fcmToken?: string;
-  fcmTokens?: string[];
+  expoPushToken?: string;
 };
 
 export async function resolveNotificationTargets(targetOrType: any, filters: TargetFilters = {}) {
@@ -86,32 +85,30 @@ export async function resolveNotificationTargets(targetOrType: any, filters: Tar
   console.log(`[NOTIFICATION_AUDIT] audienceType recebido:`, targetObj.audienceType);
   console.log(`[NOTIFICATION_AUDIT] filtros recebidos:`, JSON.stringify(normalizedFiltersForLog));
   console.log(`[NOTIFICATION_AUDIT] query final:`, JSON.stringify(query));
+  console.log(`[NOTIFICATION_TARGET] query final`, JSON.stringify(query));
 
   // Count total active users (regardless of audience filter)
   const totalActiveUsers = await User.countDocuments({ isActive: true });
   console.log(`[NOTIFICATION_AUDIT] total users ativos:`, totalActiveUsers);
+  console.log(`[NOTIFICATION_TARGET] total users ativos`, totalActiveUsers);
 
   // Count users with any push token
   const totalUsersWithToken = await User.countDocuments({
     isActive: true,
-    $or: [
-      { fcmToken: { $exists: true, $nin: [null, ""] } },
-      { fcmTokens: { $exists: true, $not: { $size: 0 } } }
-    ]
+    expoPushToken: { $exists: true, $nin: [null, ""] }
   });
   console.log(`[NOTIFICATION_AUDIT] total users com token:`, totalUsersWithToken);
+  console.log(`[NOTIFICATION_TARGET] total com expoPushToken`, totalUsersWithToken);
 
   // Limit to active users with tokens
   const tokenQuery = {
     ...query,
-    $or: [
-      { fcmToken: { $exists: true, $nin: [null, ""] } },
-      { fcmTokens: { $exists: true, $not: { $size: 0 } } }
-    ]
+    expoPushToken: { $exists: true, $nin: [null, ""] }
   };
+  console.log(`[NOTIFICATION_TARGET] query final com token`, JSON.stringify(tokenQuery));
 
   const users = await User.find(tokenQuery)
-    .select("_id role birthDate neighborhood neighborhoodName community profile interests fcmToken fcmTokens")
+    .select("_id role birthDate neighborhood neighborhoodName community profile interests expoPushToken")
     .lean<TargetUser[]>();
 
   const recipients = users.filter((user) => matchesAudience(user, targetObj));
@@ -121,7 +118,8 @@ export async function resolveNotificationTargets(targetOrType: any, filters: Tar
   const eligibleRoles = Array.from(new Set(recipients.map(u => u.role).filter(Boolean)));
 
   console.log(`[NOTIFICATION_AUDIT] recipients encontrados:`, recipients.length);
-  console.log(`[NOTIFICATION_AUDIT] campos de token encontrados:`, recipients.map(u => u.fcmToken ? "fcmToken" : (u.fcmTokens?.length ? "fcmTokens" : "none")).slice(0, 10));
+  console.log(`[NOTIFICATION_AUDIT] campos de token encontrados:`, recipients.map(u => u.expoPushToken ? "expoPushToken" : "none").slice(0, 10));
+  console.log(`[NOTIFICATION_TARGET] destinatarios encontrados`, recipients.length);
   console.log(`[NOTIFICATION_AUDIT] bairros elegíveis:`, eligibleNeighborhoods);
   console.log(`[NOTIFICATION_AUDIT] roles elegíveis:`, eligibleRoles);
   console.log(`[NOTIFICATION_AUDIT] tokens finais (contagem):`, tokens.length);
@@ -173,7 +171,7 @@ export function normalizeFilters(filters: TargetFilters = {}) {
 }
 
 function getUserTokens(user: TargetUser) {
-  return Array.from(new Set([user.fcmToken, ...(user.fcmTokens ?? [])].filter((token): token is string => Boolean(token?.trim()))));
+  return Array.from(new Set([user.expoPushToken].filter((token): token is string => Boolean(token?.trim()))));
 }
 
 function groupBy(users: TargetUser[], field: keyof TargetUser) {

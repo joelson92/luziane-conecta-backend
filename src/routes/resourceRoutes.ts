@@ -4,7 +4,7 @@ import { z } from "zod";
 import { crudController } from "../controllers/crudController.js";
 import { attendEvent, likePost, resolveDemand, sharePost, viewPost, voteSurvey } from "../controllers/domainController.js";
 import { createAndSendNotification, createNotification, getNotification, listNotifications, notificationStats, previewNotificationTargets, sendNotification, trackClick, trackOpen, updateNotification } from "../controllers/notificationController.js";
-import { createUser, getUser, listUsers, softDeleteUser, updateUser, updateUserStatus, userActivity, usersByNeighborhood, usersOverview, deleteUserPermanent, resetUserPassword } from "../controllers/userController.js";
+import { createUser, getUser, listUsers, softDeleteUser, updateUser, updateUserStatus, userActivity, usersByNeighborhood, usersOverview, deleteUserPermanent, resetUserPassword, updateMyPushToken } from "../controllers/userController.js";
 import { Demand, Event, Notification, Post, Survey, User, Video } from "../models/index.js";
 import { adminRoles, requireAuth, requireRoles } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
@@ -158,6 +158,7 @@ notificationRoutes.put("/:id", requireAuth, requireRoles(...adminRoles), updateN
 notificationRoutes.delete("/:id", requireAuth, requireRoles("SUPER_ADMIN", "PREFEITA"), notificationCrud.remove);
 
 export const userRoutes = Router();
+userRoutes.patch("/me/push-token", requireAuth, updateMyPushToken);
 userRoutes.use(requireAuth, requireRoles(...adminRoles));
 userRoutes.get("/", listUsers);
 userRoutes.get("/stats/overview", usersOverview);
