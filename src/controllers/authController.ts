@@ -13,7 +13,9 @@ export const registerSchema = z.object({
   email: z.string().email(),
   phone: z.string().refine((value) => value.replace(/\D/g, "").length >= 8, "Phone must include at least 8 digits"),
   password: z.string().min(8),
-  birthDate: z.coerce.date().optional(),
+  birthDate: z.coerce.date({ required_error: "Informe a data de nascimento." })
+    .refine((date) => date <= new Date(), "Data de nascimento não pode ser futura")
+    .refine((date) => date.getFullYear() >= new Date().getFullYear() - 120, "Data de nascimento inválida"),
   neighborhoodName: z.string().optional(),
   neighborhood: z.string().min(2),
   community: z.string().optional(),
@@ -206,13 +208,35 @@ export const register = asyncHandler(async (req, res) => {
 export const login = asyncHandler(async (req, res) => {
   const emailLower = String(req.body.email || "").toLowerCase().trim();
   const user = await User.findOne({ email: emailLower, isActive: true });
+  
+  console.log("[LOGIN_DEBUG]", {
+    email: emailLower,
+    userFound: !!user,
+    isActive: user?.get?.("isActive"),
+    role: user?.get?.("role"),
+    hasPasswordHash: Boolean(user?.get?.("passwordHash"))
+  });
+
   if (!user) throw new AppError(401, "Invalid credentials");
   const passwordHash = user.get("passwordHash");
   if (typeof passwordHash !== "string" || !passwordHash) throw new AppError(401, "Invalid credentials");
   const ok = await bcrypt.compare(req.body.password, passwordHash);
+
+  console.log("[LOGIN_DEBUG_PASSWORD]", {
+    email: emailLower,
+    passwordMatch: ok
+  });
+
   if (!ok) throw new AppError(401, "Invalid credentials");
 
-  const role = normalizeRole(String(user.get("role") || "CIDADAO"));
+  const originalRole = String(user.get("role") || "CIDADAO");
+  const role = normalizeRole(originalRole);
+  
+  console.log("[ROLE_NORMALIZATION]", {
+    originalRole,
+    normalizedRole: role
+  });
+
   if (!isAllowedRole(role)) throw new AppError(403, "User role is not allowed");
 
   const payload = { id: user.id, email: user.get("email"), role };

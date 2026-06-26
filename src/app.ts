@@ -7,6 +7,7 @@ import path from "path";
 import { env } from "./config/env.js";
 import { errorHandler, notFound } from "./middleware/error.js";
 import { authRoutes } from "./routes/authRoutes.js";
+import { meRoutes } from "./routes/meRoutes.js";
 import { crmRoutes } from "./routes/crmRoutes.js";
 import { dashboardRoutes } from "./routes/dashboardRoutes.js";
 import { demandRoutes, eventRoutes, neighborhoodRoutes, notificationRoutes, postRoutes, surveyRoutes, userRoutes, videoRoutes, adminRoutes } from "./routes/resourceRoutes.js";
@@ -19,6 +20,7 @@ import { auditRoutes } from "./routes/auditRoutes.js";
 import { geocodingRoutes } from "./routes/geocodingRoutes.js";
 import { debugRoutes } from "./routes/debugRoutes.js";
 import { locationRoutes } from "./routes/locationRoutes.js";
+import { birthdayRoutes } from "./routes/birthdayRoutes.js";
 
 export const app = express();
 
@@ -47,8 +49,10 @@ app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 app.get("/health", (_req, res) => res.json({ ok: true, name: "Luziane Conecta" }));
 
 app.use("/api/auth", authRoutes);
+app.use("/api/me", meRoutes);
 app.use("/api/posts", postRoutes);
 app.use("/api/videos", videoRoutes);
+app.use("/api/tv-luziane", videoRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/demands", demandRoutes);
 app.use("/api/events", eventRoutes);
@@ -67,6 +71,7 @@ app.use("/api/audit", auditRoutes);
 app.use("/api/geocoding", geocodingRoutes);
 app.use("/api/debug", debugRoutes);
 app.use("/api/locations", locationRoutes);
+app.use("/api/birthdays", birthdayRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

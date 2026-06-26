@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { normalizeNeighborhoodName } from "./neighborhood.js";
 
 export function normalizeTarget(value: any): string {
   return String(value || "")
@@ -93,6 +94,10 @@ export function matchesAudience(user: any, target: any): boolean {
   const hasInterestFilter = normInterests.length > 0;
   const hasUserFilter = Array.isArray(targetUserIds) && targetUserIds.length > 0;
   const hasAgeFilter = ageMin !== undefined || ageMax !== undefined;
+
+  if (!hasNeighborhoodFilter && !hasCommunityFilter && !hasRoleFilter && !hasProfileFilter && !hasInterestFilter && !hasUserFilter && !hasAgeFilter) {
+    return false;
+  }
 
   // OR within same category, AND between different categories.
   
@@ -251,4 +256,137 @@ export function buildAudienceUserQuery(target: any): any {
   }
 
   return query;
+}
+
+export function canUserAccessContent(user: any, content: any): boolean {
+  if (!user) {
+    const allowed = content.targetType === "ALL" || content.audienceType === "all";
+    
+    console.log("[TV_SEGMENTATION]");
+    console.log("userId", null);
+    console.log("role", null);
+    console.log("bairro", null);
+    console.log("community", null);
+    console.log("profile", null);
+
+    console.log("[TV_SEGMENTATION]");
+    console.log("videoId", content._id);
+    console.log("targetType", content.targetType || "ALL");
+    console.log("filters", {
+      neighborhoods: content.targetNeighborhoods || (content.neighborhoodTarget ? [content.neighborhoodTarget] : []),
+      communities: content.targetCommunities || (content.communityTarget ? [content.communityTarget] : []),
+      roles: content.targetRoles || [],
+      profiles: content.targetProfiles || [],
+      interests: content.targetInterests || [],
+      userIds: content.targetUserIds || [],
+      ageMin: content.targetAgeRange?.min,
+      ageMax: content.targetAgeRange?.max
+    });
+
+    console.log("[TV_SEGMENTATION]");
+    console.log("allowed =", allowed);
+
+    return allowed;
+  }
+
+  const targetType = content.targetType || (content.audienceType === "all" ? "ALL" : "NEIGHBORHOOD");
+  const targetFilters = {
+    neighborhoods: content.targetNeighborhoods || (content.neighborhoodTarget ? [content.neighborhoodTarget] : []),
+    communities: content.targetCommunities || (content.communityTarget ? [content.communityTarget] : []),
+    roles: content.targetRoles || [],
+    profiles: content.targetProfiles || [],
+    interests: content.targetInterests || [],
+    userIds: content.targetUserIds || [],
+    ageMin: content.targetAgeRange?.min,
+    ageMax: content.targetAgeRange?.max
+  };
+
+  let allowed = false;
+
+  if (targetType === "ALL") {
+    allowed = true;
+  } else {
+    if (targetType === "NEIGHBORHOOD") {
+      const selectedNeighborhoods = cleanTargetArray(targetFilters.neighborhoods).map(n => normalizeNeighborhoodName(n)).filter(Boolean);
+      if (selectedNeighborhoods.length === 0) {
+        allowed = false;
+      } else {
+        const userNeigh = normalizeNeighborhoodName(user.neighborhoodName || user.neighborhood);
+        allowed = selectedNeighborhoods.includes(userNeigh);
+      }
+    } else if (targetType === "COMMUNITY") {
+      const selectedCommunities = cleanTargetArray(targetFilters.communities).map(c => String(c).trim().toLowerCase()).filter(Boolean);
+      if (selectedCommunities.length === 0) {
+        allowed = false;
+      } else {
+        const userComm = String(user.community || "").trim().toLowerCase();
+        allowed = selectedCommunities.includes(userComm);
+      }
+    } else if (targetType === "ROLE") {
+      const selectedRoles = cleanTargetArray(targetFilters.roles).map(r => normalizeRole(r)).filter(Boolean);
+      if (selectedRoles.length === 0) {
+        allowed = false;
+      } else {
+        const userRole = normalizeRole(user.role || "");
+        allowed = selectedRoles.includes(userRole);
+      }
+    } else if (targetType === "PROFILE") {
+      const selectedProfiles = cleanTargetArray(targetFilters.profiles).map(p => String(p).trim().toLowerCase()).filter(Boolean);
+      if (selectedProfiles.length === 0) {
+        allowed = false;
+      } else {
+        const userProfile = String(user.profile || "").trim().toLowerCase();
+        allowed = selectedProfiles.includes(userProfile);
+      }
+    } else if (targetType === "INTERESTS") {
+      const selectedInterests = cleanTargetArray(targetFilters.interests).map(i => String(i).trim().toLowerCase()).filter(Boolean);
+      if (selectedInterests.length === 0) {
+        allowed = false;
+      } else {
+        const userInterests = (user.interests || []).map((i: any) => String(i).trim().toLowerCase());
+        allowed = userInterests.some((ui: string) => selectedInterests.includes(ui));
+      }
+    } else if (targetType === "SPECIFIC_USERS") {
+      const selectedUserIds = (targetFilters.userIds || []).map((id: any) => String(id));
+      if (selectedUserIds.length === 0) {
+        allowed = false;
+      } else {
+        allowed = selectedUserIds.includes(String(user._id || user.id));
+      }
+    } else if (targetType === "AGE_RANGE") {
+      const ageMin = targetFilters.ageMin;
+      const ageMax = targetFilters.ageMax;
+      if (ageMin === undefined && ageMax === undefined) {
+        allowed = false;
+      } else {
+        if (user.birthDate) {
+          const age = calculateAge(user.birthDate);
+          let match = true;
+          if (ageMin !== undefined && age < Number(ageMin)) match = false;
+          if (ageMax !== undefined && age > Number(ageMax)) match = false;
+          allowed = match;
+        } else {
+          allowed = false;
+        }
+      }
+    }
+  }
+
+  // Logs obrigatórios exigidos
+  console.log("[TV_SEGMENTATION]");
+  console.log("userId", user._id);
+  console.log("role", user.role);
+  console.log("bairro", user.neighborhoodName || user.neighborhood);
+  console.log("community", user.community);
+  console.log("profile", user.profile);
+
+  console.log("[TV_SEGMENTATION]");
+  console.log("videoId", content._id);
+  console.log("targetType", targetType);
+  console.log("filters", targetFilters);
+
+  console.log("[TV_SEGMENTATION]");
+  console.log("allowed =", allowed);
+
+  return allowed;
 }

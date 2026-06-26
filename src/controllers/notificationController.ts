@@ -1,7 +1,7 @@
-import { Notification } from "../models/index.js";
+import { Notification, NotificationDelivery } from "../models/index.js";
 import { asyncHandler } from "../utils/http.js";
 import { sendPushToTokens } from "../services/notificationService.js";
-import { normalizeFilters, normalizeTargetType, resolveNotificationTargets } from "../services/notificationTargetService.js";
+import { normalizeFilters, normalizeTargetType, resolveNotificationTargets, getUserTokens } from "../services/notificationTargetService.js";
 
 export const listNotifications = asyncHandler(async (_req, res) => {
   const data = await Notification.find().sort({ createdAt: -1 }).limit(200);
@@ -54,6 +54,8 @@ export const createNotification = asyncHandler(async (req: any, res) => {
   };
 
   const preview = await resolveNotificationTargets({
+    targetType,
+    targetFilters,
     audienceType,
     targetNeighborhoods,
     targetCommunities,
@@ -83,6 +85,8 @@ export const createNotification = asyncHandler(async (req: any, res) => {
     targetUserIds,
     targetAgeRange,
     recipientCount: preview.totalRecipients,
+    recipientsCount: preview.totalRecipients,
+    recipientIds: preview.users.map(u => u._id),
     scheduledAt,
     recurrence,
     status: isScheduled ? "SCHEDULED" : (req.body.status === "SCHEDULED" ? "SCHEDULED" : "DRAFT"),
@@ -91,8 +95,10 @@ export const createNotification = asyncHandler(async (req: any, res) => {
 
   if (req.body.sendNow && !isScheduled) {
     if (preview.totalRecipients === 0) {
-      const lastError = "Nenhum usuário elegível com expoPushToken válido encontrado.";
+      const lastError = (preview as any).lastError || "Nenhum usuário elegível com expoPushToken válido encontrado.";
       notification.set("recipientCount", 0);
+      notification.set("recipientsCount", 0);
+      notification.set("recipientIds", []);
       notification.set("sentCount", 0);
       notification.set("failedTokensCount", 0);
       notification.set("status", "no_recipients");
@@ -107,26 +113,77 @@ export const createNotification = asyncHandler(async (req: any, res) => {
       return;
     }
 
-    const result = await sendPushToTokens(preview.tokens, notification.get("title"), notification.get("message") ?? notification.get("body"));
-    const failedCount = (result as any).failed ?? 0;
-    const sentCount = result.sent;
-    const finalStatus =
-      sentCount === 0 && failedCount > 0
-        ? "FAILED"
-        : sentCount > 0 && failedCount > 0
-        ? "partial"
-        : sentCount === preview.totalRecipients
-        ? "SENT"
-        : "FAILED";
+    const recipients = preview.users;
+    const recipientIds = recipients.map(u => u._id);
+    const tokens = recipients.flatMap(getUserTokens);
+
+    console.log("[NOTIFICATION_RECIPIENTS_FINAL]", recipients.map(u => ({
+      id: u._id,
+      name: u.name,
+      email: (u as any).email,
+      role: u.role,
+      neighborhood: u.neighborhood,
+      neighborhoodName: u.neighborhoodName || (u as any).neighborhood
+    })));
+
+    console.log("[NOTIFICATION_DELIVERY_RECIPIENTS]", recipientIds);
+    console.log("[NOTIFICATION_PUSH_TOKENS_FROM_RECIPIENTS]", tokens);
+
+    console.log("[NOTIFICATION_PUSH_USERS]", recipients.map(u => ({
+      name: u.name,
+      email: (u as any).email,
+      token: getUserTokens(u)
+    })));
+
+    let result: any;
+    let failedCount = 0;
+    let sentCount = 0;
+    let finalStatus = "FAILED";
+
+    if (tokens.length === 0) {
+      console.log(`[NOTIFICATION_AUDIT] RESULTADO: ${recipients.length} destinatários encontrados, mas 0 tokens válidos.`);
+      result = { sent: 0, skipped: true, requested: 0, failed: recipients.length, lastError: "Usuário sem Expo Push Token válido" };
+      failedCount = recipients.length;
+    } else {
+      result = await sendPushToTokens(tokens, notification.get("title"), notification.get("message") ?? notification.get("body"), req.body.data || {});
+      failedCount = (result as any).failed ?? 0;
+      sentCount = result.sent;
+      finalStatus = sentCount > 0 ? "SENT" : "FAILED";
+    }
 
     notification.set("recipientCount", preview.totalRecipients);
     notification.set("sentCount", sentCount);
     notification.set("failedTokensCount", failedCount);
+    
+    // Novos campos
+    notification.set("recipientsCount", preview.totalRecipients);
+    notification.set("recipientIds", recipients.map(r => r._id));
+    notification.set("successCount", sentCount);
+    notification.set("failureCount", failedCount);
+    notification.set("sentBy", req.user?.id);
+    notification.set("provider", "EXPO");
     notification.set("status", finalStatus);
     notification.set("sentAt", new Date());
-    if ((result as any).lastError) notification.set("lastError", (result as any).lastError);
-    if ((result as any).providerResponse) notification.set("providerResponse", (result as any).providerResponse);
+    notification.set("lastError", result.lastError || null);
+    if (result.providerResponse) {
+      notification.set("providerResponse", {
+        tickets: result.providerResponse,
+        successCount: sentCount,
+        failureCount: failedCount
+      });
+    }
     await notification.save();
+
+    // Registrar entregas
+    const deliveries = preview.users.map((u) => ({
+      notificationId: notification._id,
+      userId: u._id,
+      status: "SENT",
+      deliveredAt: new Date()
+    }));
+    if (deliveries.length > 0) {
+      await NotificationDelivery.insertMany(deliveries);
+    }
 
     res.status(201).json({ data: notification, delivery: result, preview: { totalRecipients: preview.totalRecipients, breakdown: preview.breakdown } });
     return;
@@ -167,6 +224,8 @@ export const updateNotification = asyncHandler(async (req: any, res) => {
   };
 
   const preview = await resolveNotificationTargets({
+    targetType,
+    targetFilters,
     audienceType,
     targetNeighborhoods,
     targetCommunities,
@@ -198,6 +257,8 @@ export const updateNotification = asyncHandler(async (req: any, res) => {
       targetUserIds,
       targetAgeRange,
       recipientCount: preview.totalRecipients,
+      recipientsCount: preview.totalRecipients,
+      recipientIds: preview.users.map(u => u._id),
       scheduledAt,
       recurrence,
       status: isScheduled ? "SCHEDULED" : (notification.get("status") === "SENT" ? "SENT" : "DRAFT")
@@ -207,7 +268,7 @@ export const updateNotification = asyncHandler(async (req: any, res) => {
   res.json({ data: updated, preview: { totalRecipients: preview.totalRecipients, breakdown: preview.breakdown } });
 });
 
-export const sendNotification = asyncHandler(async (req, res) => {
+export const sendNotification = asyncHandler(async (req: any, res) => {
   const notification = await Notification.findById(req.params.id);
   if (!notification) {
     res.status(404).json({ message: "Notification not found" });
@@ -215,6 +276,7 @@ export const sendNotification = asyncHandler(async (req, res) => {
   }
 
   const targetObj = {
+    targetType: notification.get("targetType") || (notification.get("audienceType") === "all" ? "ALL" : "NEIGHBORHOOD"),
     audienceType: notification.get("audienceType") || (notification.get("targetType") === "ALL" ? "all" : "segmented"),
     targetNeighborhoods: notification.get("targetNeighborhoods") || notification.get("targetFilters")?.neighborhoods || [],
     targetCommunities: notification.get("targetCommunities") || notification.get("targetFilters")?.communities || [],
@@ -235,9 +297,11 @@ export const sendNotification = asyncHandler(async (req, res) => {
   const preview = await resolveNotificationTargets(targetObj);
 
   if (preview.totalRecipients === 0) {
-    const lastError = "Nenhum usuário elegível com expoPushToken válido encontrado.";
-    console.log("[NOTIFICATION_AUDIT] RESULTADO: 0 destinatarios — nenhum usuario elegivel com expoPushToken valido.");
+    const lastError = (preview as any).lastError || "Nenhum usuário elegível com expoPushToken válido encontrado.";
+    console.log(`[NOTIFICATION_AUDIT] RESULTADO: 0 destinatarios — ${lastError}`);
     notification.set("recipientCount", 0);
+    notification.set("recipientsCount", 0);
+    notification.set("recipientIds", []);
     notification.set("sentCount", 0);
     notification.set("failedTokensCount", 0);
     notification.set("status", "no_recipients");
@@ -248,30 +312,75 @@ export const sendNotification = asyncHandler(async (req, res) => {
     return;
   }
 
-  const result = await sendPushToTokens(preview.tokens, notification.get("title"), notification.get("message") ?? notification.get("body"));
-  console.log(`[NOTIFICATION_AUDIT] resumo do provedor push: sent=${result.sent} failed=${result.failed ?? 0} invalid=${(result as any).invalidTokensCount ?? 0}`);
-  if ((result as any).lastError) console.log(`[NOTIFICATION_AUDIT] lastError: ${(result as any).lastError}`);
+  const recipients = preview.users;
+  const recipientIds = recipients.map(u => u._id);
+  const tokens = recipients.flatMap(getUserTokens);
 
-  let newStatus: string;
-  const failedCount = (result as any).failed ?? 0;
-  if (result.sent > 0 && failedCount === 0) {
-    newStatus = "SENT";
-  } else if (result.sent > 0 && failedCount > 0) {
-    newStatus = "partial";
-    console.log(`[NOTIFICATION_AUDIT] RESULTADO: PARCIAL — ${result.sent} enviados, ${failedCount} falharam.`);
+  console.log("[NOTIFICATION_RECIPIENTS_FINAL]", recipients.map(u => ({
+    id: u._id,
+    name: u.name,
+    email: (u as any).email,
+    role: u.role,
+    neighborhood: u.neighborhood,
+    neighborhoodName: u.neighborhoodName || (u as any).neighborhood
+  })));
+
+  console.log("[NOTIFICATION_DELIVERY_RECIPIENTS]", recipientIds);
+  console.log("[NOTIFICATION_PUSH_TOKENS_FROM_RECIPIENTS]", tokens);
+
+  console.log("[NOTIFICATION_PUSH_USERS]", recipients.map(u => ({
+    name: u.name,
+    email: (u as any).email,
+    token: getUserTokens(u)
+  })));
+
+  let result: any;
+  if (tokens.length === 0) {
+    console.log(`[NOTIFICATION_AUDIT] RESULTADO: ${recipients.length} destinatários encontrados, mas 0 tokens válidos.`);
+    result = { sent: 0, skipped: true, requested: 0, failed: recipients.length, lastError: "Usuário sem Expo Push Token válido" };
   } else {
-    newStatus = "FAILED";
-    console.log(`[NOTIFICATION_AUDIT] RESULTADO: FALHA — destinatários encontrados mas nenhum push enviado. Erro: ${(result as any).lastError ?? "desconhecido"}`);
+    result = await sendPushToTokens(tokens, notification.get("title"), notification.get("message") ?? notification.get("body"), notification.get("data") || {});
+    console.log(`[NOTIFICATION_AUDIT] resumo do provedor push: sent=${result.sent} failed=${result.failed ?? 0} invalid=${(result as any).invalidTokensCount ?? 0}`);
+    if (result.lastError) console.log(`[NOTIFICATION_AUDIT] lastError: ${result.lastError}`);
   }
+
+  const newStatus = result.sent > 0 ? "SENT" : "FAILED";
+  const failedCount = result.failed ?? 0;
 
   notification.set("recipientCount", preview.totalRecipients);
   notification.set("sentCount", result.sent);
   notification.set("failedTokensCount", failedCount);
+
+  // Novos campos
+  notification.set("recipientsCount", preview.totalRecipients);
+  notification.set("recipientIds", preview.users.map(u => u._id));
+  notification.set("successCount", result.sent);
+  notification.set("failureCount", failedCount);
+  notification.set("sentBy", req.user?.id);
+  notification.set("provider", "EXPO");
   notification.set("status", newStatus);
   notification.set("sentAt", new Date());
-  if ((result as any).lastError) notification.set("lastError", (result as any).lastError);
-  if ((result as any).providerResponse) notification.set("providerResponse", (result as any).providerResponse);
+  notification.set("lastError", result.lastError || null);
+  if (result.providerResponse) {
+    notification.set("providerResponse", {
+      tickets: result.providerResponse,
+      successCount: result.sent,
+      failureCount: failedCount
+    });
+  }
   await notification.save();
+
+  // Registrar entregas
+  const deliveries = preview.users.map((u) => ({
+    notificationId: notification._id,
+    userId: u._id,
+    status: "SENT",
+    deliveredAt: new Date()
+  }));
+  if (deliveries.length > 0) {
+    await NotificationDelivery.insertMany(deliveries);
+  }
+
   console.log(`[NOTIFICATION_AUDIT] status final: ${newStatus} | enviados: ${result.sent} / ${preview.totalRecipients}`);
   res.json({ data: notification, delivery: result, preview: { totalRecipients: preview.totalRecipients, breakdown: preview.breakdown } });
 });
@@ -305,6 +414,8 @@ export const createAndSendNotification = asyncHandler(async (req: any, res) => {
   console.log(`[NOTIFICATION_AUDIT] audienceType: ${audienceType}`);
 
   const preview = await resolveNotificationTargets({
+    targetType,
+    targetFilters,
     audienceType,
     targetNeighborhoods,
     targetCommunities,
@@ -315,23 +426,49 @@ export const createAndSendNotification = asyncHandler(async (req: any, res) => {
     targetAgeRange
   });
 
-  let result: { sent: number; skipped: boolean; requested: number; failed?: number; lastError?: string };
+  let result: any;
   let finalStatus: string;
 
   if (preview.totalRecipients === 0) {
-    const lastError = "Nenhum usuário elegível com expoPushToken válido encontrado.";
-    console.log("[NOTIFICATION_AUDIT] RESULTADO: 0 destinatarios — salvando como no_recipients.");
+    const lastError = (preview as any).lastError || "Nenhum usuário elegível com expoPushToken válido encontrado.";
+    console.log(`[NOTIFICATION_AUDIT] RESULTADO: 0 destinatarios — ${lastError}`);
     result = { sent: 0, skipped: true, requested: 0, failed: 0, lastError };
     finalStatus = "no_recipients";
   } else {
-    result = await sendPushToTokens(preview.tokens, req.body.title, req.body.message ?? req.body.body);
-    const failedCount = (result as any).failed ?? 0;
-    console.log(`[NOTIFICATION_AUDIT] resumo do provedor push: sent=${result.sent} failed=${failedCount} invalid=${(result as any).invalidTokensCount ?? 0}`);
-    if ((result as any).lastError) console.log(`[NOTIFICATION_AUDIT] lastError: ${(result as any).lastError}`);
-    if (result.sent > 0 && failedCount === 0) finalStatus = "SENT";
-    else if (result.sent > 0 && failedCount > 0) finalStatus = "partial";
-    else finalStatus = "FAILED";
-    console.log(`[NOTIFICATION_AUDIT] status final: ${finalStatus} | enviados: ${result.sent} / ${preview.totalRecipients}`);
+    const recipients = preview.users;
+    const recipientIds = recipients.map(u => u._id);
+    const tokens = recipients.flatMap(getUserTokens);
+
+    console.log("[NOTIFICATION_RECIPIENTS_FINAL]", recipients.map(u => ({
+      id: u._id,
+      name: u.name,
+      email: (u as any).email,
+      role: u.role,
+      neighborhood: u.neighborhood,
+      neighborhoodName: u.neighborhoodName || (u as any).neighborhood
+    })));
+
+    console.log("[NOTIFICATION_DELIVERY_RECIPIENTS]", recipientIds);
+    console.log("[NOTIFICATION_PUSH_TOKENS_FROM_RECIPIENTS]", tokens);
+
+    console.log("[NOTIFICATION_PUSH_USERS]", recipients.map(u => ({
+      name: u.name,
+      email: (u as any).email,
+      token: getUserTokens(u)
+    })));
+
+    if (tokens.length === 0) {
+      console.log(`[NOTIFICATION_AUDIT] RESULTADO: ${recipients.length} destinatários encontrados, mas 0 tokens válidos.`);
+      result = { sent: 0, skipped: true, requested: 0, failed: recipients.length, lastError: "Usuário sem Expo Push Token válido" };
+      finalStatus = "FAILED";
+    } else {
+      result = await sendPushToTokens(tokens, req.body.title, req.body.message ?? req.body.body, req.body.data || {});
+      const failedCount = result.failed ?? 0;
+      console.log(`[NOTIFICATION_AUDIT] resumo do provedor push: sent=${result.sent} failed=${failedCount} invalid=${(result as any).invalidTokensCount ?? 0}`);
+      if (result.lastError) console.log(`[NOTIFICATION_AUDIT] lastError: ${result.lastError}`);
+      finalStatus = result.sent > 0 ? "SENT" : "FAILED";
+      console.log(`[NOTIFICATION_AUDIT] status final: ${finalStatus} | enviados: ${result.sent} / ${preview.totalRecipients}`);
+    }
   }
   const notification = await Notification.create({
     title: req.body.title,
@@ -349,14 +486,37 @@ export const createAndSendNotification = asyncHandler(async (req: any, res) => {
     targetAgeRange,
     recipientCount: preview.totalRecipients,
     sentCount: result.sent,
-    failedTokensCount: (result as any).failed ?? 0,
+    failedTokensCount: result.failed ?? 0,
+
+    recipientsCount: preview.totalRecipients,
+    recipientIds: preview.users.map(u => u._id),
+    successCount: result.sent,
+    failureCount: result.failed ?? 0,
+    sentBy: req.user?.id,
+    provider: "EXPO",
     recurrence: "NONE",
     status: finalStatus,
     createdBy: req.user?.id,
     sentAt: new Date(),
-    lastError: result.lastError,
-    providerResponse: (result as any).providerResponse
+    lastError: result.lastError || null,
+    providerResponse: result.providerResponse ? {
+      tickets: result.providerResponse,
+      successCount: result.sent,
+      failureCount: result.failed ?? 0
+    } : undefined
   });
+
+  // Registrar entregas
+  if (finalStatus === "SENT" && preview.users.length > 0) {
+    const deliveries = preview.users.map((u) => ({
+      notificationId: notification._id,
+      userId: u._id,
+      status: "SENT",
+      deliveredAt: new Date()
+    }));
+    await NotificationDelivery.insertMany(deliveries);
+  }
+
   res.status(201).json({ data: notification, delivery: result, preview: { totalRecipients: preview.totalRecipients, breakdown: preview.breakdown } });
 });
 
@@ -418,3 +578,74 @@ export const notificationStats = asyncHandler(async (_req, res) => {
     }
   });
 });
+
+/** GET /api/notifications/my — histórico do usuário logado */
+export const listMyNotifications = asyncHandler(async (req: any, res) => {
+  const userId = req.user.id;
+  
+  const deliveries = await NotificationDelivery.find({ userId })
+    .populate("notificationId")
+    .sort({ createdAt: -1 })
+    .limit(100);
+
+  const mapped = deliveries
+    .filter(d => d.notificationId)
+    .map(d => {
+      const notif = d.notificationId as any;
+      return {
+        _id: notif._id,
+        deliveryId: d._id,
+        title: notif.title,
+        body: notif.body || notif.message,
+        message: notif.message || notif.body,
+        status: d.status,
+        isRead: d.status === "READ",
+        createdAt: notif.createdAt,
+        sentAt: notif.sentAt,
+        targetType: notif.targetType
+      };
+    });
+
+  res.json({ data: mapped });
+});
+
+/** GET /api/notifications/unread-count — obter contagem de notificações não lidas */
+export const getMyUnreadCount = asyncHandler(async (req: any, res) => {
+  const userId = req.user.id;
+  const count = await NotificationDelivery.countDocuments({
+    userId,
+    status: "SENT"
+  });
+  res.json({ data: { count } });
+});
+
+/** POST /api/notifications/:id/read — marcar como lida */
+export const markNotificationAsRead = asyncHandler(async (req: any, res) => {
+  const userId = req.user.id;
+  const notificationId = req.params.id;
+
+  const delivery = await NotificationDelivery.findOneAndUpdate(
+    { notificationId, userId },
+    { $set: { status: "READ", readAt: new Date() } },
+    { new: true }
+  );
+
+  if (!delivery) {
+    // Tentar encontrar e criar se o usuário for elegível, ou apenas retornar 404 se não houver registro
+    res.status(404).json({ message: "Registro de entrega da notificação não encontrado." });
+    return;
+  }
+
+  res.json({ success: true, ok: true, message: "Notificação marcada como lida." });
+});
+
+/** POST /api/notifications/read-all — marcar todas as notificações do usuário como lidas */
+export const markAllNotificationsAsRead = asyncHandler(async (req: any, res) => {
+  const userId = req.user.id;
+  await NotificationDelivery.updateMany(
+    { userId, status: "SENT" },
+    { $set: { status: "READ", readAt: new Date() } }
+  );
+  res.json({ success: true, ok: true, message: "Todas as notificações foram marcadas como lidas." });
+});
+

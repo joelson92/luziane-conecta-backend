@@ -36,6 +36,14 @@ const notificationSchema = new Schema(
     lastError: { type: String },
     providerResponse: { type: Schema.Types.Mixed },
 
+    // Novos campos requeridos
+    recipientsCount: { type: Number, default: 0 },
+    recipientIds: { type: [Schema.Types.ObjectId], ref: "User", default: [] },
+    successCount: { type: Number, default: 0 },
+    failureCount: { type: Number, default: 0 },
+    sentBy: { type: Schema.Types.ObjectId, ref: "User" },
+    provider: { type: String, default: "EXPO" },
+
     // Unified targeting properties
     audienceType: { type: String, enum: ["all", "segmented"], default: "all" },
     targetNeighborhoods: { type: [String], default: [] },
@@ -47,7 +55,11 @@ const notificationSchema = new Schema(
     targetAgeRange: {
       min: Number,
       max: Number
-    }
+    },
+    
+    // Automação
+    type: { type: String, enum: ["DEFAULT", "BIRTHDAY_AUTO"], default: "DEFAULT" },
+    birthdayAutoDate: { type: String }
   },
   { timestamps: true }
 );

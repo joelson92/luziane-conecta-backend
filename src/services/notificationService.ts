@@ -18,19 +18,18 @@ type PushResult = {
  * Tokens sem formato Expo sao contabilizados como falha e nao sao enviados via Firebase.
  */
 export async function sendPushToTokens(tokens: string[], title: string, body: string, data: Record<string, unknown> = {}): Promise<PushResult> {
+  console.log("[PUSH_SEND] tokens recebidos do controller", tokens.length);
+  console.log("[PUSH_SEND] inicio");
+  console.log("[PUSH_SEND] provider", "Expo Push SDK");
+  console.log("[PUSH_SEND] destinatarios", tokens.length);
+  console.log("[PUSH_SEND] tokens", tokens.length);
+
   const uniqueTokens = Array.from(new Set(tokens.map((token) => token?.trim()).filter((token): token is string => Boolean(token))));
   const validTokens = uniqueTokens.filter((token) => Expo.isExpoPushToken(token));
-  const invalidFormatTokens: string[] = [];
-  for (const token of uniqueTokens) {
-    if (!Expo.isExpoPushToken(token)) invalidFormatTokens.push(token);
-  }
+  const invalidFormatTokens = uniqueTokens.filter((token) => !Expo.isExpoPushToken(token));
 
-  console.log(`[PUSH_SEND] provider usado: Expo Push SDK`);
-  console.log(`[PUSH_SEND] tokens recebidos=${tokens.length} unicos=${uniqueTokens.length} validosExpo=${validTokens.length} invalidos=${invalidFormatTokens.length}`);
-
-  if (invalidFormatTokens.length > 0) {
-    console.log("[PUSH_SEND] tokens ignorados por formato invalido", invalidFormatTokens.map((token) => token.slice(0, 24)));
-  }
+  console.log("[PUSH_SEND] tokens válidos", validTokens.length);
+  console.log("[PUSH_SEND] tokens inválidos", invalidFormatTokens);
 
   if (uniqueTokens.length === 0) {
     return {
@@ -47,10 +46,15 @@ export async function sendPushToTokens(tokens: string[], title: string, body: st
   const messages: ExpoPushMessage[] = validTokens.map((token) => ({
     to: token,
     sound: "default",
+    priority: "high",
+    channelId: "default",
     title,
     body,
     data
   }));
+
+  console.log("[PUSH_SEND] provider usado: Expo Push SDK");
+  console.log("[PUSH_SEND] mensagens enviadas", messages.length);
 
   const chunks = expo.chunkPushNotifications(messages);
   const responses: ExpoPushTicket[] = [];
@@ -63,6 +67,7 @@ export async function sendPushToTokens(tokens: string[], title: string, body: st
     try {
       console.log(`[PUSH_SEND] enviando chunk Expo com ${chunk.length} mensagens`);
       const tickets = await expo.sendPushNotificationsAsync(chunk);
+      console.log("[PUSH_SEND] tickets", tickets);
       responses.push(...tickets);
 
       tickets.forEach((ticket, index) => {
@@ -102,7 +107,8 @@ export async function sendPushToTokens(tokens: string[], title: string, body: st
     }
   }
 
-  console.log(`[PUSH_SEND] resultado Expo sent=${sent} failed=${failed} requested=${uniqueTokens.length}`);
+  console.log("[PUSH_SEND] sent", sent);
+  console.log("[PUSH_SEND] failed", failed);
 
   return {
     sent,

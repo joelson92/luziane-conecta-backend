@@ -50,7 +50,22 @@ export function validatePasswordStrength(password: string) {
   }
 }
 
+export function validateBirthDate(birthDate: string | Date | undefined, role: string) {
+  if (role === "CIDADAO" && !birthDate) {
+    throw new AppError(400, "Informe a data de nascimento.");
+  }
+  if (birthDate) {
+    const date = new Date(birthDate);
+    if (isNaN(date.getTime())) throw new AppError(400, "Data de nascimento inválida.");
+    if (date > new Date()) throw new AppError(400, "Data de nascimento não pode ser futura.");
+    if (date.getFullYear() < new Date().getFullYear() - 120) throw new AppError(400, "Data de nascimento inválida.");
+  }
+}
+
 export const createUser = asyncHandler(async (req, res) => {
+  const role = normalizeRole(req.body.role || "CIDADAO");
+  validateBirthDate(req.body.birthDate, role);
+
   const password = req.body.password || "User@123456";
   validatePasswordStrength(password);
   const passwordHash = await bcrypt.hash(password, 12);
@@ -63,6 +78,12 @@ export const createUser = asyncHandler(async (req, res) => {
 export const updateUser = asyncHandler(async (req, res) => {
   const user = await User.findById(req.params.id);
   if (!user) throw new AppError(404, "User not found");
+
+  const targetRole = normalizeRole(req.body.role || user.role);
+  if (req.body.birthDate !== undefined || targetRole === "CIDADAO") {
+    const newBirthDate = req.body.birthDate !== undefined ? req.body.birthDate : user.birthDate;
+    validateBirthDate(newBirthDate, targetRole);
+  }
 
   const cepChanged = user.zipCode !== req.body.zipCode;
 
@@ -445,3 +466,76 @@ export const updateMyPushToken = asyncHandler(async (req: any, res) => {
   console.log(`[PUSH_TOKEN] expoPushToken atualizado para usuario ${user.email} (${platform}): ${cleanToken.slice(0, 40)}...`);
   res.json({ success: true, ok: true, expoPushToken: user.get("expoPushToken"), message: "Token push atualizado com sucesso." });
 });
+
+/**
+ * POST /api/notifications/register-token
+ * Recebe o token push do app mobile e salva no usuário autenticado.
+ */
+export const registerPushToken = asyncHandler(async (req: any, res) => {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ message: "Não autenticado." });
+    return;
+  }
+
+  const token: string | undefined = req.body?.expoPushToken || req.body?.token;
+  const platform: "android" | "ios" | "web" | undefined = req.body?.platform;
+
+  if (!token || typeof token !== "string" || !token.trim()) {
+    res.status(400).json({ message: "Token push inválido ou ausente." });
+    return;
+  }
+
+  const cleanToken = token.trim();
+  console.log(`[PUSH_REGISTER] userId: ${userId}`);
+  console.log(`[PUSH_REGISTER] expoPushToken: ${cleanToken}`);
+
+  console.log("[PUSH_REGISTER] removendo token dos outros usuários");
+  await User.updateMany(
+    { _id: { $ne: userId } },
+    {
+      $unset: {
+        expoPushToken: "",
+        pushToken: ""
+      },
+      $pull: {
+        pushTokens: cleanToken
+      }
+    }
+  );
+
+  const user = await User.findByIdAndUpdate(
+    userId,
+    {
+      $set: {
+        expoPushToken: cleanToken,
+        pushPlatform: platform ?? "android",
+        pushTokenUpdatedAt: new Date(),
+        pushToken: cleanToken,
+        notificationPermission: "granted",
+        lastPushTokenAt: new Date()
+      },
+      $addToSet: {
+        pushTokens: cleanToken
+      }
+    },
+    { new: true }
+  ).select("-passwordHash -refreshTokenHash");
+
+  if (!user) {
+    res.status(404).json({ message: "Usuário não encontrado." });
+    return;
+  }
+
+  console.log("[PUSH_REGISTER] token salvo somente no usuário atual");
+
+  res.json({
+    success: true,
+    ok: true,
+    expoPushToken: user.get("expoPushToken"),
+    pushToken: user.get("pushToken"),
+    pushTokens: user.get("pushTokens"),
+    message: "Token push registrado com sucesso."
+  });
+});
+

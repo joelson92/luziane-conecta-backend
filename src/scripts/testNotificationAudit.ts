@@ -1,186 +1,103 @@
 import mongoose from "mongoose";
-import { User } from "../models/User.js";
-import { resolveNotificationTargets } from "../services/notificationTargetService.js";
+import * as dotenv from "dotenv";
+import path from "path";
+import { User, Notification, NotificationDelivery } from "../models/index.js";
+import { resolveNotificationTargets, normalizeFilters } from "../services/notificationTargetService.js";
+
+dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 
 async function run() {
-  console.log("=== TESTE DE AUDITORIA DE NOTIFICAÇÕES ===");
-
+  console.log("=== INICIANDO TESTE DE AUDITORIA DE SEGMENTAÇÃO E TOKENS ===");
   const mongoUri = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/luziane-conecta";
   await mongoose.connect(mongoUri);
-  console.log("Conectado ao MongoDB.\n");
+  console.log("Conectado ao MongoDB.");
 
   try {
-    // 1. Criar/garantir usuários de teste com push tokens
-    const testUsers = [
-      {
-        email: "notify_centro@luziane.com",
-        name: "Usuário Notif Centro",
-        neighborhood: "Centro",
-        neighborhoodName: "Centro",
-        role: "CIDADAO",
-        expoPushToken: "ExponentPushToken[FAKE_TOKEN_CENTRO_001]"
-      },
-      {
-        email: "notify_bengolandia@luziane.com",
-        name: "Usuário Notif Bengolândia",
-        neighborhood: "Bengolândia",
-        neighborhoodName: "Bengolândia",
-        role: "CIDADAO",
-        expoPushToken: "ExponentPushToken[FAKE_TOKEN_BENGO_001]"
-      },
-      {
-        email: "notify_duque@luziane.com",
-        name: "Usuário Notif Duque de Caxias",
-        neighborhood: "Duque de Caxias",
-        neighborhoodName: "Duque de Caxias",
-        role: "CIDADAO",
-        expoPushToken: "ExponentPushToken[FAKE_TOKEN_DUQUE_001]"
-      }
-    ];
-
-    const savedUsers: any[] = [];
-    for (const u of testUsers) {
-      let user = await User.findOne({ email: u.email });
-      if (!user) {
-        user = await User.create({ ...u, passwordHash: "dummy_hash", isActive: true });
-        console.log(`✅ Criado: ${u.email}`);
-      } else {
-        user.neighborhood = u.neighborhood;
-        user.neighborhoodName = u.neighborhoodName;
-        user.role = u.role as any;
-        user.set("expoPushToken", u.expoPushToken);
-        user.isActive = true;
-        await user.save();
-        console.log(`✅ Atualizado: ${u.email}`);
-      }
-      savedUsers.push(user);
-    }
-
-    const [userCentro, userBengo, userDuque] = savedUsers;
-
-    console.log("\n=== INICIANDO TESTES DE SEGMENTAÇÃO ===\n");
-
-    // ──────────────────────────────────────────
-    // Cenário 1: Todos os usuários
-    // ──────────────────────────────────────────
-    console.log("──────────────────────────────────────────");
-    console.log("Cenário 1: Todos os usuários");
-    const result1 = await resolveNotificationTargets({
-      audienceType: "all",
-      targetNeighborhoods: [],
-      targetCommunities: [],
-      targetRoles: [],
-      targetProfiles: [],
-      targetInterests: [],
-      targetUserIds: []
-    });
-    const c1_centro = result1.users.some((u: any) => String(u._id) === String(userCentro._id));
-    const c1_bengo  = result1.users.some((u: any) => String(u._id) === String(userBengo._id));
-    const c1_duque  = result1.users.some((u: any) => String(u._id) === String(userDuque._id));
-    console.log(`  Centro recebe? ${c1_centro} (Esp: true) | Bengolândia recebe? ${c1_bengo} (Esp: true) | Duque recebe? ${c1_duque} (Esp: true)`);
-    console.log(`  Total destinatários: ${result1.totalRecipients} (>= 3 esperado)`);
-    console.log(`  Cenário 1: ${c1_centro && c1_bengo && c1_duque && result1.totalRecipients >= 3 ? "✅ SUCESSO" : "❌ FALHOU"}\n`);
-
-    // ──────────────────────────────────────────
-    // Cenário 2: Bairro Centro
-    // ──────────────────────────────────────────
-    console.log("──────────────────────────────────────────");
-    console.log("Cenário 2: Bairro Centro");
-    const result2 = await resolveNotificationTargets({
-      audienceType: "segmented",
-      targetNeighborhoods: ["Centro"],
-      targetCommunities: [],
-      targetRoles: [],
-      targetProfiles: [],
-      targetInterests: [],
-      targetUserIds: []
-    });
-    const c2_centro = result2.users.some((u: any) => String(u._id) === String(userCentro._id));
-    const c2_bengo  = result2.users.some((u: any) => String(u._id) === String(userBengo._id));
-    const c2_duque  = result2.users.some((u: any) => String(u._id) === String(userDuque._id));
-    console.log(`  Centro recebe? ${c2_centro} (Esp: true) | Bengolândia recebe? ${c2_bengo} (Esp: false) | Duque recebe? ${c2_duque} (Esp: false)`);
-    console.log(`  Cenário 2: ${c2_centro && !c2_bengo && !c2_duque ? "✅ SUCESSO" : "❌ FALHOU"}\n`);
-
-    // ──────────────────────────────────────────
-    // Cenário 3: Bairro Bengolândia
-    // ──────────────────────────────────────────
-    console.log("──────────────────────────────────────────");
-    console.log("Cenário 3: Bairro Bengolândia");
-    const result3 = await resolveNotificationTargets({
-      audienceType: "segmented",
-      targetNeighborhoods: ["Bengolândia"],
-      targetCommunities: [],
-      targetRoles: [],
-      targetProfiles: [],
-      targetInterests: [],
-      targetUserIds: []
-    });
-    const c3_centro = result3.users.some((u: any) => String(u._id) === String(userCentro._id));
-    const c3_bengo  = result3.users.some((u: any) => String(u._id) === String(userBengo._id));
-    const c3_duque  = result3.users.some((u: any) => String(u._id) === String(userDuque._id));
-    console.log(`  Centro recebe? ${c3_centro} (Esp: false) | Bengolândia recebe? ${c3_bengo} (Esp: true) | Duque recebe? ${c3_duque} (Esp: false)`);
-    console.log(`  Cenário 3: ${!c3_centro && c3_bengo && !c3_duque ? "✅ SUCESSO" : "❌ FALHOU"}\n`);
-
-    // ──────────────────────────────────────────
-    // Cenário 4: Bairro Duque de Caxias
-    // ──────────────────────────────────────────
-    console.log("──────────────────────────────────────────");
-    console.log("Cenário 4: Bairro Duque de Caxias");
-    const result4 = await resolveNotificationTargets({
-      audienceType: "segmented",
-      targetNeighborhoods: ["Duque de Caxias"],
-      targetCommunities: [],
-      targetRoles: [],
-      targetProfiles: [],
-      targetInterests: [],
-      targetUserIds: []
-    });
-    const c4_centro = result4.users.some((u: any) => String(u._id) === String(userCentro._id));
-    const c4_bengo  = result4.users.some((u: any) => String(u._id) === String(userBengo._id));
-    const c4_duque  = result4.users.some((u: any) => String(u._id) === String(userDuque._id));
-    console.log(`  Centro recebe? ${c4_centro} (Esp: false) | Bengolândia recebe? ${c4_bengo} (Esp: false) | Duque recebe? ${c4_duque} (Esp: true)`);
-    console.log(`  Cenário 4: ${!c4_centro && !c4_bengo && c4_duque ? "✅ SUCESSO" : "❌ FALHOU"}\n`);
-
-    // ──────────────────────────────────────────
-    // Cenário 5: Bairro inexistente
-    // ──────────────────────────────────────────
-    console.log("──────────────────────────────────────────");
-    console.log("Cenário 5: Bairro inexistente");
-    const result5 = await resolveNotificationTargets({
-      audienceType: "segmented",
-      targetNeighborhoods: ["Bairro Que Nao Existe XYZ"],
-      targetCommunities: [],
-      targetRoles: [],
-      targetProfiles: [],
-      targetInterests: [],
-      targetUserIds: []
-    });
-    console.log(`  Total destinatários: ${result5.totalRecipients} (0 esperado)`);
-    console.log(`  Cenário 5 (no_recipients): ${result5.totalRecipients === 0 ? "✅ SUCESSO" : "❌ FALHOU"}\n`);
-
-    // ──────────────────────────────────────────
-    // Verificar campo fcmToken dos usuários reais
-    // ──────────────────────────────────────────
-    console.log("──────────────────────────────────────────");
-    console.log("Verificação: usuários reais com token no banco");
-    const usersWithToken = await User.find({
+    // Preparando dados
+    const uDataA = {
+      name: "Usuário A (Santos Dumont)",
+      email: "audit_a@luziane.com",
+      passwordHash: "dummy",
+      role: "CIDADAO",
+      neighborhood: "Santos Dumont",
+      neighborhoodName: "Santos Dumont",
       isActive: true,
-      $or: [
-        { fcmToken: { $exists: true, $nin: [null, ""] } },
-        { fcmTokens: { $exists: true, $not: { $size: 0 } } }
-      ]
-    }).select("name email neighborhood fcmToken").lean();
+      expoPushToken: "ExponentPushToken[AUDIT_A]",
+      pushToken: "ExponentPushToken[AUDIT_A]",
+      pushTokens: ["ExponentPushToken[AUDIT_A]"]
+    };
 
-    console.log(`  Total usuários ativos com token: ${usersWithToken.length}`);
-    for (const u of usersWithToken) {
-      const token = (u as any).fcmToken || "—";
-      console.log(`  - ${(u as any).name} (${(u as any).neighborhood}): ${token.slice(0, 50)}...`);
+    const uDataB = {
+      name: "Usuário B (Duque de Caxias)",
+      email: "audit_b@luziane.com",
+      passwordHash: "dummy",
+      role: "CIDADAO",
+      neighborhood: "Duque de Caxias",
+      neighborhoodName: "Duque de Caxias",
+      isActive: true,
+      expoPushToken: "ExponentPushToken[AUDIT_B]",
+      pushToken: "ExponentPushToken[AUDIT_B]",
+      pushTokens: ["ExponentPushToken[AUDIT_B]"]
+    };
+
+    const uDataC = {
+      name: "Usuário C (Centro, SUPER_ADMIN)",
+      email: "audit_c@luziane.com",
+      passwordHash: "dummy",
+      role: "SUPER_ADMIN",
+      neighborhood: "Centro",
+      neighborhoodName: "Centro",
+      isActive: true,
+      expoPushToken: "ExponentPushToken[AUDIT_C]",
+      pushToken: "ExponentPushToken[AUDIT_C]",
+      pushTokens: ["ExponentPushToken[AUDIT_C]"]
+    };
+
+    const createOrUpdate = async (data: any) => {
+      let u = await User.findOne({ email: data.email });
+      if (!u) {
+        u = await User.create(data);
+      } else {
+        Object.assign(u, data);
+        await u.save();
+      }
+      return u;
+    };
+
+    const userA = await createOrUpdate(uDataA);
+    const userB = await createOrUpdate(uDataB);
+    const userC = await createOrUpdate(uDataC);
+
+    console.log("\nUsuários criados/atualizados com sucesso.");
+
+    // 1. Validando target resolution (Santos Dumont)
+    console.log("\n-> Validando resolução de targets (Bairro = Santos Dumont)");
+    const preview = await resolveNotificationTargets({
+      targetType: "NEIGHBORHOOD",
+      targetFilters: { neighborhoods: ["Santos Dumont"] }
+    });
+
+    const containsA = preview.users.some(u => String(u._id) === String(userA._id));
+    const containsB = preview.users.some(u => String(u._id) === String(userB._id));
+    const containsC = preview.users.some(u => String(u._id) === String(userC._id));
+    
+    const hasOnlyTokenA = preview.tokens.length === 1 && preview.tokens[0] === "ExponentPushToken[AUDIT_A]";
+
+    if (containsA && !containsB && !containsC && hasOnlyTokenA) {
+      console.log("🟢 OK: resolveNotificationTargets encontrou o Usuário A (e omitiu B e C) e derivou apenas tokenA.");
+    } else {
+      console.error("🔴 FALHA: Resolução de targets incorreta.");
+      console.error("Esperado: apenas Usuário A e tokenA.");
+      console.error("Obtido usuários:", preview.users.map(u => u.name));
+      console.error("Obtido tokens:", preview.tokens);
     }
 
+  } catch (error) {
+    console.error("Erro durante a execução do script de teste:", error);
   } finally {
     await mongoose.disconnect();
-    console.log("\nConexão encerrada.");
+    console.log("\nConexão com o banco de dados encerrada.");
   }
 }
 
-run().catch(console.error);
+run();

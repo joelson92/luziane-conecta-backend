@@ -1,14 +1,18 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
+import jwt from "jsonwebtoken";
+import { env } from "../config/env.js";
 import { crudController } from "../controllers/crudController.js";
+import { canUserAccessContent } from "../utils/audience.js";
 import { attendEvent, likePost, resolveDemand, sharePost, viewPost, voteSurvey } from "../controllers/domainController.js";
-import { createAndSendNotification, createNotification, getNotification, listNotifications, notificationStats, previewNotificationTargets, sendNotification, trackClick, trackOpen, updateNotification } from "../controllers/notificationController.js";
-import { createUser, getUser, listUsers, softDeleteUser, updateUser, updateUserStatus, userActivity, usersByNeighborhood, usersOverview, deleteUserPermanent, resetUserPassword, updateMyPushToken } from "../controllers/userController.js";
+import { createAndSendNotification, createNotification, getNotification, listNotifications, notificationStats, previewNotificationTargets, sendNotification, trackClick, trackOpen, updateNotification, listMyNotifications, markNotificationAsRead, getMyUnreadCount, markAllNotificationsAsRead } from "../controllers/notificationController.js";
+import { createUser, getUser, listUsers, softDeleteUser, updateUser, updateUserStatus, userActivity, usersByNeighborhood, usersOverview, deleteUserPermanent, resetUserPassword, updateMyPushToken, registerPushToken } from "../controllers/userController.js";
 import { Demand, Event, Notification, Post, Survey, User, Video } from "../models/index.js";
 import { adminRoles, requireAuth, requireRoles } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
-import { asyncHandler } from "../utils/http.js";
+import { asyncHandler, AppError } from "../utils/http.js";
+import { extractYoutubeVideoId } from "../utils/youtube.js";
 import { enrichDemandAddress, enrichUserAddress } from "../services/geocodingService.js";
 
 import path from "path";
@@ -19,6 +23,17 @@ const postCrud = crudController(Post);
 
 const videoCrud = crudController(Video, {
   mapPayload: async (payload, req) => {
+    const isExternal = payload.sourceType === "external" || (payload.videoUrl && payload.sourceType !== "upload" && !payload.videoFileUrl && !payload.videoUrl.includes("/uploads/"));
+    if (isExternal) {
+      const videoId = extractYoutubeVideoId(payload.videoUrl);
+      if (!videoId) {
+        throw new AppError(400, "Informe uma URL válida do YouTube.");
+      }
+      payload.videoId = videoId;
+      payload.provider = "YOUTUBE";
+      payload.platform = "youtube";
+    }
+
     if (req.method === "POST") {
       return { ...payload, createdBy: req.user?.id, updatedBy: req.user?.id };
     }
@@ -105,8 +120,62 @@ postRoutes.post("/:id/like", requireAuth, likePost);
 postRoutes.post("/:id/view", viewPost);
 postRoutes.post("/:id/share", sharePost);
 
+const listVideosHandler = asyncHandler(async (req: any, res) => {
+  const query: Record<string, any> = {};
+  
+  let user: any = null;
+  let isAdmin = false;
+  
+  const authorization = req.headers.authorization;
+  const match = authorization?.match(/^Bearer\s+(.+)$/i);
+  const token = match?.[1];
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, env.JWT_SECRET) as any;
+      if (decoded && decoded.id) {
+        user = await User.findById(decoded.id).lean();
+        if (user) {
+          const roleMap: Record<string, string> = {
+            superadmin: "SUPER_ADMIN",
+            super_admin: "SUPER_ADMIN",
+            mayor: "PREFEITA",
+            prefeita: "PREFEITA",
+            lideranca: "PREFEITA",
+            advisor: "ASSESSOR",
+            assessor: "ASSESSOR",
+            citizen: "CIDADAO",
+            cidadao: "CIDADAO"
+          };
+          const normalizedRole = roleMap[user.role?.toLowerCase()] ?? user.role;
+          if (["SUPER_ADMIN", "PREFEITA", "ASSESSOR"].includes(normalizedRole)) {
+            isAdmin = true;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("JWT Verification failed inside video listing:", err);
+    }
+  }
+
+  if (req.query.status) {
+    query.status = req.query.status;
+  } else if (!isAdmin) {
+    query.status = "published";
+  }
+
+  const videos = await Video.find(query).sort({ createdAt: -1 }).limit(200);
+
+  if (isAdmin) {
+    res.json({ data: videos });
+    return;
+  }
+
+  const allowedVideos = videos.filter((video) => canUserAccessContent(user, video));
+  res.json({ data: allowedVideos });
+});
+
 export const videoRoutes = Router();
-videoRoutes.get("/", videoCrud.list);
+videoRoutes.get("/", listVideosHandler);
 videoRoutes.get("/:id", videoCrud.get);
 videoRoutes.post("/", requireAuth, requireRoles(...adminRoles), videoCrud.create);
 videoRoutes.patch("/:id", requireAuth, requireRoles(...adminRoles), videoCrud.update);
@@ -143,7 +212,11 @@ surveyRoutes.post("/:id/vote", requireAuth, validate(z.object({ optionId: z.stri
 import { listInternalNotifications } from "../controllers/internalNotificationController.js";
 
 export const notificationRoutes = Router();
-notificationRoutes.get("/my", requireAuth, listInternalNotifications);
+notificationRoutes.post("/register-token", requireAuth, registerPushToken);
+notificationRoutes.get("/my", requireAuth, listMyNotifications);
+notificationRoutes.get("/unread-count", requireAuth, getMyUnreadCount);
+notificationRoutes.post("/read-all", requireAuth, markAllNotificationsAsRead);
+notificationRoutes.post("/:id/read", requireAuth, markNotificationAsRead);
 notificationRoutes.get("/", requireAuth, requireRoles(...adminRoles), listNotifications);
 notificationRoutes.get("/stats", requireAuth, requireRoles(...adminRoles), notificationStats);
 notificationRoutes.post("/preview-targets", requireAuth, requireRoles(...adminRoles), previewNotificationTargets);
